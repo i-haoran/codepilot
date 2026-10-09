@@ -17,8 +17,10 @@ import traceback
 
 _PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_PROJECT_DIR, "backend"))
-# 本机 PyPI 不可达，aiosqlite 用 .devshims 下的最小兼容层替代（仅本地验证用）
-sys.path.insert(0, os.path.join(_PROJECT_DIR, ".devshims"))
+# .devshims 是本机依赖垫片目录（PyPI 不可达时的临时替代），仅在存在时加入路径
+_devshims = os.path.join(_PROJECT_DIR, ".devshims")
+if os.path.isdir(_devshims):
+    sys.path.insert(0, _devshims)
 
 PASS, FAIL, SKIP = [], [], []
 

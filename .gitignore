@@ -66,6 +66,13 @@ desktop.ini
 P0*.docx
 P1*.docx
 
+# ---------- 本地辅助脚本（个人求职材料生成用） ----------
+setup_git.py
+gen_resume_docx.py
+面试逐条拆解.md
+实习求职策略.md
+投递前必做清单.md
+
 # ---------- 其他 ----------
 *.bak
 .ngrok*
