@@ -1,0 +1,79 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    env_file:
+      - backend/.env
+    environment:
+      # 容器内通过服务名访问，覆盖 .env 里的 localhost
+      DATABASE_URL: postgresql+asyncpg://codepilot:codepilot@postgres:5432/codepilot
+      REDIS_URL: redis://redis:6379/0
+      CHROMA_COLLECTION: codepilot_knowledge
+    volumes:
+      # 与 app/rag/retriever.py 中的路径保持一致：
+      # backend/app/rag/retriever.py 上溯三层 → /app/chroma_data
+      - chroma_data:/app/chroma_data
+      - hf_cache:/root/.cache/huggingface
+      - uploads:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # 前端开发服务器（Vite HMR）。生产镜像已内置构建产物，无需此服务。
+  frontend:
+    image: node:20-slim
+    working_dir: /app
+    command: sh -c "npm ci && npm run dev -- --host 0.0.0.0"
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - node_modules:/app/node_modules
+    depends_on:
+      - backend
+    restart: unless-stopped
+    profiles: ["dev"]   # 仅在 docker compose --profile dev up 时启动
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: codepilot
+      POSTGRES_PASSWORD: codepilot
+      POSTGRES_DB: codepilot
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U codepilot"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  pg_data:
+  redis_data:
+  chroma_data:
+  hf_cache:
+  uploads:
+  node_modules:
