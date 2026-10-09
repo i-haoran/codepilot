@@ -1,0 +1,71 @@
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+backend/.venv/
+backend/.venv-linux/
+
+# ---------- 环境变量与密钥 ----------
+# 绝不提交真实密钥：一旦进入 git 历史，即使后续删除也仍然可被检出，
+# 必须到对应平台吊销并重置 Key。
+.env
+.env.*
+!.env.example
+*.env.local
+
+# ---------- 前端 ----------
+node_modules/
+frontend/dist/
+.vite/
+
+# ---------- 向量库与模型缓存（体积大且可重建） ----------
+backend/chroma_data/
+backend/.hf_cache/
+.cache/
+
+# ---------- 上传文件 ----------
+backend/uploads/
+
+# ---------- 日志 ----------
+*.log
+logs/
+
+# ---------- 测试与临时产物 ----------
+.pytest_cache/
+.coverage
+htmlcov/
+test.db
+*.db-journal
+
+# 本地开发用的依赖垫片（本机网络受限时的临时替代，不入库）
+.devshims/
+.testdeps/
+
+# ---------- IDE ----------
+.idea/
+.vscode/
+*.swp
+*.swo
+*.iml
+
+# ---------- 操作系统 ----------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------- 个人文档（简历、报告等，不属于代码仓库） ----------
+*.docx
+*.pdf
+简历*.md
+P0*.docx
+P1*.docx
+
+# ---------- 其他 ----------
+*.bak
+.ngrok*

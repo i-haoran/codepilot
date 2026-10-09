@@ -1,0 +1,49 @@
+# CodePilot 后端依赖
+
+# ---------- Web 框架 ----------
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2.7
+pydantic-settings>=2.3
+python-multipart>=0.0.9
+
+# ---------- 数据库 ----------
+sqlalchemy[asyncio]>=2.0.30
+asyncpg>=0.29.0          # PostgreSQL 异步驱动（生产）
+aiosqlite>=0.19          # SQLite 异步驱动（测试）
+alembic>=1.13.0
+
+# ---------- 缓存 ----------
+# 注意：aioredis 已废弃（且与 redis>=5 冲突）。redis>=4.2 自带
+# `redis.asyncio`，代码里用的就是这个模块，无需单独依赖 aioredis。
+redis>=5.0.1
+
+# ---------- LLM & Agent ----------
+langchain>=0.3.0
+langchain-core>=0.3.0
+langchain-community>=0.3.0
+langchain-openai>=0.2.0
+langchain-text-splitters>=0.3.0
+langgraph>=0.2.0
+
+# ---------- RAG / Embedding ----------
+langchain-huggingface>=0.1.0     # HuggingFaceEmbeddings 的正式归属包
+chromadb>=0.5.0
+sentence-transformers>=3.0.0     # CrossEncoder 重排 + 本地中文向量模型
+numpy>=1.26,<3
+
+# ---------- 限流 ----------
+slowapi>=0.1.9
+
+# ---------- 鉴权 ----------
+python-jose[cryptography]>=3.3.0
+bcrypt>=4.1.2
+
+# ---------- HTTP / 工具 ----------
+httpx>=0.27
+aiohttp>=3.9.1
+python-dotenv>=1.0.0
+
+# ---------- 测试 ----------
+pytest>=7.4
+pytest-asyncio>=0.23
