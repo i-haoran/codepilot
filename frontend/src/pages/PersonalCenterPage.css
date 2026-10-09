@@ -1,0 +1,398 @@
+.profile-page {
+  padding: 24px;
+  height: 100%;
+  overflow-y: auto;
+}
+
+.profile-header {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  margin-bottom: 32px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.avatar-section {
+  position: relative;
+  cursor: pointer;
+}
+
+.avatar-circle {
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  background: #e5e7eb;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.avatar-circle img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.avatar-text {
+  font-size: 32px;
+  font-weight: 600;
+  color: #6b7280;
+}
+
+.avatar-overlay {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.5);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.avatar-section:hover .avatar-overlay {
+  opacity: 1;
+}
+
+.profile-info h2 {
+  margin: 0;
+  font-size: 22px;
+  color: #1f2937;
+}
+
+.name-clickable {
+  cursor: pointer;
+}
+
+.name-clickable:hover {
+  color: #3b82f6;
+}
+
+.name-edit {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.name-edit input {
+  padding: 6px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 16px;
+}
+
+.profile-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 24px;
+  border-bottom: 2px solid #e5e7eb;
+}
+
+.tab {
+  padding: 10px 20px;
+  background: none;
+  border: none;
+  font-size: 14px;
+  color: #6b7280;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+}
+
+.tab:hover {
+  color: #374151;
+}
+
+.tab.active {
+  color: #3b82f6;
+  border-bottom-color: #3b82f6;
+}
+
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.section-header h3 {
+  margin: 0;
+  font-size: 16px;
+  color: #1f2937;
+}
+
+.btn-primary-sm {
+  padding: 6px 16px;
+  background: #3b82f6;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.btn-primary-sm:hover { background: #2563eb; }
+.btn-primary-sm:disabled { background: #9ca3af; cursor: not-allowed; }
+
+.btn-secondary {
+  padding: 6px 16px;
+  background: white;
+  color: #374151;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.btn-delete-sm {
+  padding: 2px 8px;
+  background: none;
+  color: #ef4444;
+  border: 1px solid #fca5a5;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.doc-item:hover .btn-delete-sm,
+.history-conv-item:hover .btn-delete-sm {
+  opacity: 1;
+}
+
+.btn-delete-sm:hover {
+  background: #fef2f2;
+}
+
+.doc-stats {
+  display: flex;
+  gap: 16px;
+  font-size: 13px;
+  color: #6b7280;
+  margin-bottom: 16px;
+}
+
+.doc-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.doc-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  position: relative;
+}
+
+.doc-icon { font-size: 20px; }
+.doc-name { flex: 1; font-size: 14px; color: #374151; }
+.doc-chunks { font-size: 12px; color: #9ca3af; }
+
+.empty-hint {
+  text-align: center;
+  color: #9ca3af;
+  padding: 40px;
+  font-size: 14px;
+}
+
+.history-split {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 20px;
+  height: 500px;
+}
+
+.history-conv-list {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  overflow-y: auto;
+  background: white;
+}
+
+.history-conv-list h3 {
+  margin: 0;
+  padding: 12px 16px;
+  font-size: 14px;
+  border-bottom: 1px solid #e5e7eb;
+  color: #1f2937;
+}
+
+.history-conv-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  cursor: pointer;
+  border-bottom: 1px solid #f3f4f6;
+  transition: background 0.15s;
+}
+
+.history-conv-item:hover { background: #f9fafb; }
+.history-conv-item.active { background: #eff6ff; }
+
+.hcv-title {
+  font-size: 13px;
+  color: #374151;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.history-detail {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 16px;
+  overflow-y: auto;
+  background: white;
+}
+
+.history-detail h3 {
+  margin: 0 0 16px;
+  font-size: 16px;
+  color: #1f2937;
+}
+
+.history-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.hm-item {
+  padding: 12px;
+  background: #f9fafb;
+  border-radius: 8px;
+}
+
+.hm-q {
+  font-weight: 500;
+  color: #1f2937;
+  margin-bottom: 8px;
+}
+
+.hm-a {
+  color: #374151;
+  white-space: pre-wrap;
+  line-height: 1.6;
+}
+
+.hm-time {
+  font-size: 11px;
+  color: #9ca3af;
+  margin-top: 8px;
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modal {
+  background: white;
+  border-radius: 16px;
+  padding: 32px;
+  width: 440px;
+}
+
+.modal h3 {
+  margin: 0 0 20px;
+}
+
+.upload-zone {
+  border: 2px dashed #d1d5db;
+  border-radius: 12px;
+  padding: 32px;
+  text-align: center;
+  cursor: pointer;
+}
+
+.upload-zone:hover { border-color: #3b82f6; }
+
+.upload-icon { font-size: 36px; margin-bottom: 8px; }
+.hint { color: #9ca3af; font-size: 13px; margin-top: 4px; }
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+@media (max-width: 768px) {
+  .profile-page {
+    padding: 16px;
+  }
+
+  .profile-header {
+    flex-direction: column;
+    text-align: center;
+    gap: 16px;
+    margin-bottom: 24px;
+    padding-bottom: 16px;
+  }
+
+  .avatar-circle {
+    width: 64px;
+    height: 64px;
+  }
+
+  .avatar-text {
+    font-size: 24px;
+  }
+
+  .profile-info h2 {
+    font-size: 18px;
+  }
+
+  .profile-tabs {
+    margin-bottom: 16px;
+  }
+
+  .tab {
+    padding: 8px 12px;
+    font-size: 13px;
+  }
+
+  .history-split {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+
+  .history-conv-list {
+    max-height: 300px;
+  }
+
+  .doc-item {
+    padding: 10px 12px;
+  }
+
+  .doc-name {
+    font-size: 13px;
+  }
+
+  .modal {
+    width: 90vw;
+    padding: 20px;
+  }
+
+  .upload-zone {
+    padding: 24px;
+  }
+}

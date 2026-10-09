@@ -1,0 +1,97 @@
+.agent-trace-panel {
+  position: fixed;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 280px;
+  background: #1f2937;
+  color: white;
+  padding: 20px;
+  overflow-y: auto;
+  animation: slideIn 0.3s ease;
+}
+
+@keyframes slideIn {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+.trace-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #374151;
+}
+
+.trace-icon {
+  font-size: 18px;
+}
+
+.trace-title {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.trace-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.trace-item {
+  display: flex;
+  gap: 12px;
+}
+
+.trace-step-indicator {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.step-dot {
+  width: 10px;
+  height: 10px;
+  background: #4b5563;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.step-dot.active {
+  background: #3b82f6;
+  box-shadow: 0 0 8px rgba(59, 130, 246, 0.5);
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.2); }
+}
+
+.step-line {
+  width: 2px;
+  flex: 1;
+  background: #374151;
+  margin: 4px 0;
+}
+
+.trace-content {
+  padding-bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.step-label {
+  font-size: 11px;
+  color: #9ca3af;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.step-text {
+  font-size: 13px;
+  color: #d1d5db;
+  line-height: 1.4;
+}
