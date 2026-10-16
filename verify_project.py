@@ -94,12 +94,18 @@ def _():
     return f"可用（未发请求）节点={nodes}"
 
 
+@check("导入 app.agents.verifier（审查 Agent）")
+def _():
+    from app.agents.verifier import VerifierAgent
+    v = VerifierAgent()
+    return f"可用，llm={type(v.llm).__name__}"
+
+
 @check("导入 app.core.app（FastAPI 应用）")
 def _():
     from app.core.app import app
     paths = sorted({r.path for r in app.routes if hasattr(r, "path")})
     return f"{len(paths)} 条路由（slowapi 可用={HAVE_SLOWAPI}）"
-
 
 @check("导入 app.api.routes（不依赖 slowapi 的路由层）")
 def _():
@@ -492,6 +498,127 @@ async def run_e2e():
     except Exception as exc:  # noqa: BLE001
         record(name, False, f"{type(exc).__name__}: {exc}")
         traceback.print_exc()
+
+
+# ---------------------------------------------------------------------- #
+print("\n=== 8. 多 Agent 协作与审查 Agent ===")
+# ---------------------------------------------------------------------- #
+@check("图结构：worker → verifier → revise → worker 构成真实回路")
+def _():
+    from app.agents.supervisor import SupervisorAgent
+    g = SupervisorAgent().graph.get_graph()
+    nodes = set(g.nodes)
+    assert {"supervisor", "rag_worker", "tool_worker", "direct_llm",
+            "verifier", "revise", "finalize"} <= nodes, nodes
+    edges = {(e.source, e.target) for e in g.edges}
+    for w in ("rag_worker", "tool_worker", "direct_llm"):
+        assert (w, "verifier") in edges, f"{w} 未接入 verifier"
+        assert ("revise", w) in edges, f"revise 无法回到 {w}"
+    assert ("verifier", "revise") in edges
+    assert ("verifier", "finalize") in edges
+    return f"节点={len(nodes)} 边={len(edges)}，存在反馈回路"
+
+
+@check("审查解析：通过 / 不通过 / Markdown 包裹 / 带解释文字")
+def _():
+    from app.agents.verifier import VerifierAgent
+    cases = [
+        ('{"pass": true, "reason": "有依据"}', True),
+        ('{"pass": false, "reason": "无依据"}', False),
+        ('```json\n{"pass": false, "reason": "答非所问"}\n```', False),
+        ('判定如下：\n{"pass": true, "reason": "OK"}\n以上', True),
+    ]
+    for raw, expected in cases:
+        v = VerifierAgent._parse(raw)
+        assert v.passed is expected, f"{raw} → {v.passed}"
+    return f"{len(cases)} 种输出形态均正确解析"
+
+
+@check("审查解析：失败时放行但显式标记（不隐藏问题）")
+def _():
+    from app.agents.verifier import VerifierAgent
+    for raw in ["完全不是 JSON", "", "{非法JSON}"]:
+        v = VerifierAgent._parse(raw)
+        assert v.passed is True, "应放行"
+        assert v.parse_failed is True, "必须标记解析失败"
+        assert v.label == "解析失败（放行）"
+    return "3 种非法输入均放行且被标记"
+
+
+@check("路由：通过→交付；不通过→重做；达上限→放弃重试")
+def _():
+    from app.agents.supervisor import MAX_REVISIONS, SupervisorAgent
+    a = SupervisorAgent()
+    assert a._route_after_verifier({"verdict_passed": True}) == "finalize"
+    assert a._route_after_verifier({"verdict_passed": False, "revision_count": 0}) == "revise"
+    assert a._route_after_verifier(
+        {"verdict_passed": False, "revision_count": MAX_REVISIONS - 1}
+    ) == "finalize"
+    return f"三种分支正确（上限 {MAX_REVISIONS} 轮）"
+
+
+@check("修订回到原分支，而不是重新分类")
+def _():
+    from app.agents.supervisor import SupervisorAgent
+    a = SupervisorAgent()
+    for w in ("rag_worker", "tool_worker", "direct_llm"):
+        assert a._route_to_worker({"next_worker": w}) == w
+    return "三条分支均正确回送"
+
+
+@check("★ 最终保证：审查不通过时输出的必须是拒答，绝不能是原草稿")
+async def _():
+    from app.agents.supervisor import SupervisorAgent
+    a = SupervisorAgent()
+    fabricated = "知识库中有 3 份文档（这是编造的）"
+    result = await a._finalize_node({
+        "verdict_passed": False,
+        "draft": fabricated,
+        "verdict_reason": "文档数量在参考资料中找不到依据",
+    })
+    text = result["response_text"]
+    assert "无法可靠地回答" in text, "未输出拒答话术"
+    assert "3 份文档" not in text, "编造内容被泄漏给用户！"
+    assert "找不到依据" in text, "未说明拒答原因"
+    return "已拦截编造内容，并告知用户原因"
+
+
+@check("拒答话术在无 reason 时也有兜底")
+def _():
+    from app.agents.verifier import Verdict, VerifierAgent
+    text = VerifierAgent.build_refusal(Verdict(passed=False))
+    assert "无法可靠地回答" in text and len(text) > 20
+    return text.split("\n")[0]
+
+
+@check("审查：草稿为空 → 不通过；无 Key → 跳过但不假装审查")
+async def _():
+    from app.agents import verifier as vm
+    from app.agents.verifier import VerifierAgent
+
+    agent = VerifierAgent()
+    original = vm.settings.DEEPSEEK_API_KEY
+    try:
+        vm.settings.DEEPSEEK_API_KEY = None
+        v = await agent.review("问题", "草稿", "证据")
+        assert v.passed is True and "未配置" in v.reason
+
+        vm.settings.DEEPSEEK_API_KEY = "test-key"
+        v2 = await agent.review("问题", "   ", "证据")
+        assert v2.passed is False and "空" in v2.reason
+    finally:
+        vm.settings.DEEPSEEK_API_KEY = original
+    return "未配置跳过 / 空草稿不通过 均正确"
+
+
+@check("定稿分片可无损还原（前端打字机不丢字）")
+def _():
+    from app.agents.supervisor import SupervisorAgent
+    text = "这是一段用于验证分片还原的文本，长度足够。"
+    chunks = SupervisorAgent._iter_chunks(text, size=2)
+    assert "".join(chunks) == text, "分片还原后文本不一致"
+    assert all(len(c) <= 2 for c in chunks)
+    return f"{len(text)} 字 → {len(chunks)} 片，无损还原"
 
 
 # ---------------------------------------------------------------------- #

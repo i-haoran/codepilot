@@ -152,7 +152,8 @@ async def chat(
         )
 
     agent = SupervisorAgent()
-    response = await agent.run(chat_request.message, user.id, history_records)
+    # 同步接口也传入 db：工具调用需要数据库会话，且同样走完整审查流程
+    response = await agent.run(chat_request.message, user.id, history_records, db=db)
     await cache.set(cache_key, response)
 
     db.add(ChatHistory(

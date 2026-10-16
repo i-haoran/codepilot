@@ -2,9 +2,10 @@
 
 基于 **LangGraph 多 Agent 编排 + RAG 检索增强生成** 的研发知识助手系统。
 
-面向团队内部技术文档问答场景：上传文档 → 自动分块向量化 → 意图路由 → 检索重排 → 流式生成 → Agent 轨迹可视化。
+面向团队内部技术文档问答场景：上传文档 → 自动分块向量化 → 意图路由 → 检索重排 → 生成草稿 → **独立审查** → 交付 → Agent 轨迹可视化。
 
-后端 FastAPI 异步架构，前端 React + TypeScript，支持 SSE 逐 token 流式输出与真实 Function Calling。
+后端 FastAPI 异步架构，前端 React + TypeScript，支持 SSE 流式下发、真实 Function Calling，
+以及 **Supervisor + Worker + Verifier 多 Agent 协作**（审查不通过会带反馈回传重新生成）。
 
 ---
 
@@ -25,19 +26,34 @@
 │  rag_worker   │   │  tool_worker   │   │   direct_llm   │
 ├───────────────┤   ├────────────────┤   ├────────────────┤
 │ 向量召回 Top-10│   │ bind_tools     │   │ 通用对话        │
-│ Cross-Encoder │   │  执行工具       │   │                │
-│ 重排 Top-5    │   │  回填 ToolMsg   │   │                │
-│ 组装上下文     │   │  再流式生成      │   │                │
+│ Cross-Encoder │   │ 执行工具        │   │                │
+│ 重排 Top-5    │   │ 回填 ToolMsg    │   │                │
+│ 组装上下文     │   │                │   │                │
 └───────┬───────┘   └───────┬────────┘   └───────┬────────┘
-        └───────────────────┴────────────────────┘
-                            ▼
-                     __end__ → token 生成器
-                            ▼
-                 SSE 逐 token 下发（text/event-stream）
+        └───────────────────┼────────────────────┘
+                            ▼   生成草稿 + 证据
+                   ┌──────────────────┐
+                   │     verifier     │  独立审查：核对依据、是否答到点
+                   └────────┬─────────┘
+                            │
+              ┌─────────────┴─────────────┐
+              │ 不通过（≤3轮）              │ 通过
+              ▼                           ▼
+        ┌──────────┐              ┌──────────────┐
+        │  revise  │              │   finalize   │
+        └────┬─────┘              └──────┬───────┘
+             │ 带反馈回送对应 Worker       │
+             └──► worker               SSE 下发（text/event-stream）
+                                             │
+                                           __end__
 ```
 
-**节点间通过共享 `AgentState`（TypedDict）传递**会话历史、执行轨迹与 token 生成器；
-每个 Worker 独立收敛后用 `add_edge(..., "__end__")` 结束，不做多跳串联。
+**节点间通过共享 `AgentState`（TypedDict）传递**：会话历史、草稿、证据、审查意见、执行轨迹。
+`agent_trace` 使用 **reducer（`Annotated[List[str], operator.add]`）** 按执行顺序累加——
+LangGraph 默认是"后写覆盖先写"，不加 reducer 会只剩最后一行的轨迹。
+
+**协作体现在回路上**：`worker → verifier → revise → worker` 是一条真实的反馈回路，
+verifier 的判定与修改意见会回传给 worker 触发重新生成；连续 3 轮不通过则**诚实拒答**。
 
 ---
 
@@ -112,22 +128,47 @@ python verify_project.py
 
 ## 核心实现要点
 
-### 1. 真实流式输出（SSE，逐 token 透传）
+### 1. 多 Agent 协作：生成 + 独立审查（反馈回路）
 
-RAG 分支的节点内部调用 LLM 的 `astream()`，把**异步生成器作为节点出参**返回；
-节点本身仍立即返回，由路由层从最终 state 取出生成器并逐 token 透传给 SSE。
+本项目把一次问答拆成 **分类 → 生成 → 审查 → 交付** 四个阶段。
+让「多 Agent 协作」成立的不是"有多个节点"，而是 **verifier 的判定会回传给 worker 触发重新生成**：
 
-这样首字延迟（TTFT）只等于 LLM 产出首个 token 的时间，而不是整段生成时间。
+```
+worker → verifier ─通过→ finalize → END
+              │
+              └─不通过→ revise →（带 feedback 回到原 worker，≤3 轮）
+                                    │
+                                    └─超限→ 诚实拒答，绝不交付编造内容
+```
 
-> 反面做法：先 `await llm.ainvoke()` 拿到完整字符串，再逐字符 yield。
-> 前端看起来也是"打字机效果"，但 TTFT 没有任何改善——这是常见的伪流式实现。
+**为什么需要独立审查**：生成 Agent 有两类无法自我发现的问题——
+① **无依据断言**：检索为空或工具没返回数据时，模型仍给出具体数字与文件名，
+**不抛异常、日志正常**；② **答非所问**。
+同一个模型在同一次生成里已经走完那条推理路径，无法可靠地审查自己。
 
-事件协议（每帧 `data: {json}\n\n`）：
+**审查判定原则**：
+- 草稿中每个具体事实（数字、文件名、配置项、API 名）都必须能在【参考资料】里找到出处
+- 必须正面回答用户问题，多部分问题不能只答一半
+- **资料确实不足时，"明确说明没有相关信息"判定为通过**——诚实拒答是合格答案
+
+**最终保证**：连续 3 轮未通过时，`finalize` 输出**诚实拒答**，
+而不是那份可能编造的草稿。验证脚本对此有专门断言（原草稿内容绝不能出现在输出里）。
+
+> 实测：同一个问题「知识库里有哪些文档？」
+> 改造前回答 **「知识库中包含 3 份文档」——编造的（实际 0 份）**；
+> 改造后回答 **「知识库当前文档数量为 0 份」**，依据是 `get_knowledge_base_stats()` 的真实返回值。
+
+**⚠️ 代价（主动说明）**：为保证审查能拦住**整段**内容，必须「完整生成 → 审查 → 再下发」，
+因此**真正的逐 token 流式没有了**：首字延迟从 ~1.46s 增至 **~2.42s（+66%）**。
+**全文审查与真流式在单次请求内不可兼得**，本项目的选择是**可靠性优先**。
+若要两者兼得，可改为分段审查（生成一段→审查一段→通过即下发），代价是无法发现跨段落的不一致。
+
+### 2. SSE 事件协议
 
 | type | 载荷 | 说明 |
 |---|---|---|
-| `trace` | `content: []`、`tool_calls: []` | 执行轨迹与工具调用记录 |
-| `token` | `content: "增量文本"` | 逐 token 输出 |
+| `trace` | `content: []`、`tool_calls: []` | 执行轨迹、工具调用记录与**审查结论** |
+| `token` | `content: "增量文本"` | 增量输出（审查通过后的定稿） |
 | `conv_id` | `content: "<会话ID>"` | 会话标识 |
 | `error` | `content: "错误信息"` | 异常 |
 | `done` | — | 结束标记 |
@@ -135,10 +176,18 @@ RAG 分支的节点内部调用 LLM 的 `astream()`，把**异步生成器作为
 前端用 `fetch` + `response.body.getReader()` 手动解析流——不用 `EventSource`，
 因为它只支持 GET 且无法自定义请求头，而这里需要 POST 并携带 `Authorization`。
 
-### 2. 真实 Function Calling
+> 典型轨迹（真实运行输出）：
+> ```
+> Supervisor 意图分类 → tool
+> Tool Worker 调用工具 get_knowledge_base_stats()
+> Verifier 审查（第 1 轮）→ 通过：草稿给出的文档数量与参考资料中工具返回的统计数字完全一致
+> Finalize 已通过审查，输出定稿
+> ```
+
+### 3. 真实 Function Calling
 
 `tool_worker` 用 `llm.bind_tools(ALL_TOOLS)` 让模型返回结构化 `tool_calls`，
-执行后把结果作为 `ToolMessage` 回填，再流式生成最终回答（最多 3 轮）。
+执行后把结果作为 `ToolMessage` 回填，再生成草稿（工具调用最多 3 轮）。
 
 已实现的 4 个工具（全部操作真实数据，非占位）：
 
@@ -152,7 +201,7 @@ RAG 分支的节点内部调用 LLM 的 `astream()`，把**异步生成器作为
 运行期依赖（`AsyncSession`、`user_id`）通过 **`contextvars`** 传递而非模块级全局变量——
 这一点很关键：并发的 SSE 请求各自持有独立 context，不会串用户数据。
 
-### 3. 两阶段检索：向量召回 + Cross-Encoder 重排
+### 4. 两阶段检索：向量召回 + Cross-Encoder 重排
 
 | 阶段 | 原理 | 特点 |
 |---|---|---|
@@ -164,7 +213,7 @@ RAG 分支的节点内部调用 LLM 的 `astream()`，把**异步生成器作为
 
 **降级**：Cross-Encoder 模型不可用时按向量检索原顺序截断返回，链路不中断。
 
-### 4. 用户级知识库隔离
+### 5. 用户级知识库隔离
 
 向量库 `metadata` 写入 `user_id` / `doc_id` / `chunk_index`，
 查询时用 `where={"user_id": ...}` 过滤；数据库层同样带 `user_id` 条件。
@@ -172,7 +221,7 @@ RAG 分支的节点内部调用 LLM 的 `astream()`，把**异步生成器作为
 
 > 说明：这是**应用层软隔离**。若需强隔离，应使用独立 collection 或数据库行级权限。
 
-### 5. 缓存与故障降级
+### 6. 缓存与故障降级
 
 - 键为 `{user_id}:{message}` 的 SHA-256 摘要——**包含 user_id，避免不同用户命中彼此答案**
 - Redis `setex` 带 TTL（默认 300s）
@@ -238,7 +287,9 @@ documents                        chat_history       │
 CodePilot/
 ├── backend/
 │   ├── app/
-│   │   ├── agents/supervisor.py     # LangGraph 编排 + 流式生成 + Function Calling
+│   │   ├── agents/
+│   │   │   ├── supervisor.py        # LangGraph 编排（Supervisor+Worker+Verifier 回路）
+│   │   │   └── verifier.py          # 审查 Agent：核对依据、检测无依据断言
 │   │   ├── api/{auth,routes}.py     # 路由层
 │   │   ├── core/{app,config,auth,database,logging}.py
 │   │   ├── models/                  # SQLAlchemy 模型（4 张表）
@@ -255,7 +306,8 @@ CodePilot/
 │   ├── components/                  # ChatMessage / ChatInput / AgentTrace
 │   ├── pages/                       # Chat / KnowledgeBase / History / PersonalCenter / Login
 │   └── services/api.ts              # axios + SSE 流解析
-├── verify_project.py                # 端到端自检脚本
+├── verify_project.py                # 结构与逻辑自检（38 项，不依赖 LLM）
+├── verify_llm_flow.py               # 真实 LLM 路径验证（分类/审查/协作回路）
 ├── Dockerfile                       # 多阶段构建
 └── docker-compose.yml               # backend + postgres + redis (+ frontend)
 ```
@@ -268,6 +320,8 @@ CodePilot/
 
 | 问题 | 现象 | 修复 |
 |---|---|---|
+| **LangGraph 状态字段被覆盖** | `agent_trace` 只剩最后一行，前面所有节点的轨迹被冲掉，"可观测性"形同虚设 | 用 reducer（`Annotated[List[str], operator.add]`）让轨迹按执行顺序累加 |
+| **生成 Agent 会编造** | 检索为空/工具无数据时仍给出具体数字与文件名，且不抛异常、日志正常 | 增加独立审查 Agent；连续 3 轮不通过则诚实拒答，绝不交付编造内容 |
 | `ChatOpenAI` 参数名 | 新版 langchain-openai 移除了 `openai_api_key` 别名，构造时直接抛 `OpenAIError` | 改用 `api_key` / `base_url` |
 | `.env` 读取路径 | `env_file=".env"` 相对**工作目录**解析，从项目根启动读不到配置，API Key 全部取默认值 | 改为相对 config.py 所在目录定位 |
 | 分块依赖缺失 | `langchain_text_splitters` 在 langchain 1.x 已非默认安装，缺失导致整个 RAG 层 import 失败 | 自实现零依赖递归分块 |
@@ -289,22 +343,33 @@ CodePilot/
 cd backend
 python -m pytest tests/ -v
 
-# 或使用不依赖 pytest 的端到端自检
+# 结构与逻辑自检（38 项，不依赖 LLM / 外部密钥）
 python verify_project.py
+
+# 真实 LLM 路径验证（意图分类 / 审查判定 / 协作回路）
+python verify_llm_flow.py
 ```
 
 测试覆盖：鉴权保护、会话 CRUD、文档上传与向量写入、知识库统计、
-路径穿越防护、分块边界、缓存降级、工具 schema 与错误处理、JWT 篡改拒绝。
+路径穿越防护、分块边界、缓存降级、工具 schema 与错误处理、JWT 篡改拒绝，
+以及**审查结果解析容错、协作回路图结构、审查不通过时不得交付原草稿**等关键断言。
 
 ---
 
 ## 已知限制与后续方向
 
+- **首字延迟**：为保证全文审查，采用「完整生成 → 审查 → 交付」，首字延迟增加约 66%；
+  后续可改为**分段审查**（生成一段 → 审查一段 → 通过即下发），代价是无法发现跨段落的不一致
+- **混合意图**：当前为单跳路由，Supervisor 一次只能选一条分支，
+  「列出文档并总结第一条」这类混合需求只能答一半；
+  可升级为 **worker 工具化**（把 worker 注册成 Supervisor 可调用的工具，在循环里多轮调用）
+  或**并行 Worker + 合并**
+- **审查非绝对可靠**：Verifier 也是一次 LLM 判定，同样可能误判。
+  它能拦住"无依据断言"这类高发错误并让判定可观测，但不是 100% 保证
 - **文档格式**：目前仅支持 UTF-8 文本类文件，PDF / Word 需接入解析库
 - **语义缓存**：当前为精确匹配缓存，可演进为基于 embedding 相似度的语义缓存
-- **评测体系**：缺少检索质量量化指标，可自建问答测试集统计 Hit@K / MRR
-- **意图分类**：当前每次请求都调用 LLM 分类，高 QPS 下可换小模型或加分类缓存
-- **多跳编排**：目前为单跳路由，复杂任务可扩展为多 Worker 串行/并行
+- **检索评测**：缺少 Hit@K / MRR 等量化指标，可自建问答测试集补齐
+- **意图分类成本**：当前每次请求都调用 LLM 分类，高 QPS 下可换小模型或加分类缓存
 - **Reranker 并发**：Cross-Encoder 推理已放入线程池，进一步可做批处理或独立推理服务
 
 ---
