@@ -71,6 +71,28 @@ def _read_frontend_html() -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+
+    # 启动时校验知识库索引一致性：
+    # 向量库可能因 embedding 模型变更、chroma_data 被删除、写入中断等原因被清空，
+    # 而数据库仍保有两个记录与原文。此时检索会全部落空，用户表现为
+    # 「知识库里有文档却问什么都答不出来」；引入审查 Agent 后更会以
+    # "诚实拒答"的形式出现，看起来像功能行为而非故障，因此必须自动修复。
+    try:
+        from app.core.database import async_session
+        from app.services.reindex import reconcile_knowledge_base
+
+        async with async_session() as session:
+            report = await reconcile_knowledge_base(session)
+        if report:
+            logger.warning(
+                "启动时重建了知识库索引：修复 %s 份文档 / %s 个分块"
+                "（修复前 数据库=%s 向量库=%s，修复后=%s）",
+                report["documents"], report["chunks"],
+                report["expected_before"], report["actual_before"], report["total_after"],
+            )
+    except Exception as exc:  # noqa: BLE001 - 校验失败不应阻断启动
+        logger.error("知识库索引一致性校验失败（不影响服务启动）: %s", exc, exc_info=True)
+
     logger.info("%s v%s 启动完成", settings.APP_NAME, settings.APP_VERSION)
     yield
 

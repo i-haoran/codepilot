@@ -381,6 +381,17 @@ async def upload_document(
 
     processor = DocumentProcessor()
     chunks = processor.process(text, metadata={"filename": file.filename, "user_id": user.id})
+    if not chunks:
+        raise HTTPException(status_code=400, detail="文档分块后为空，请检查文件内容")
+
+    # 先确认向量库可用：否则会出现「数据库有记录、向量库没有」的假成功，
+    # 而用户看到的只是"上传成功"，之后无论怎么提问都检索不到内容。
+    retriever = RAGRetriever()
+    if retriever.collection is None:
+        raise HTTPException(
+            status_code=503,
+            detail="向量库当前不可用，文档未入库。请检查后端日志中的 Chroma / Embedding 错误。",
+        )
 
     doc = Document(
         user_id=user.id,
@@ -392,10 +403,23 @@ async def upload_document(
     await db.commit()
     await db.refresh(doc)
 
-    retriever = RAGRetriever()
     written = retriever.add_chunks(chunks, doc_id=doc.id, user_id=user.id)
+
+    # 向量写入不完整时**不要静默成功**：纠正记录值并如实告知，
+    # 避免留下「chunk_count 说有 N 块、实际检索不到」的不一致状态。
     if written != len(chunks):
-        logger.warning("向量写入数量与分块数不一致: written=%s chunks=%s", written, len(chunks))
+        logger.error(
+            "向量写入不完整: written=%s chunks=%s doc_id=%s filename=%s",
+            written, len(chunks), doc.id, doc.filename,
+        )
+        if doc.chunk_count != written:
+            doc.chunk_count = written
+            await db.commit()
+        if written == 0:
+            raise HTTPException(
+                status_code=500,
+                detail="文档已保存，但向量化失败，检索将无法命中。请查看后端日志。",
+            )
 
     return DocumentResponse(
         id=doc.id, filename=doc.filename,
