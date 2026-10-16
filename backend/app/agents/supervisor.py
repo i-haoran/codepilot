@@ -87,6 +87,37 @@ CLASSIFY_PROMPT = (
 MAX_TOOL_ROUNDS = 3     # tool_worker 内部工具调用轮次上限
 MAX_REVISIONS = 3       # 「生成 → 审查 → 重新生成」轮次上限
 
+# ---------------------------------------------------------------------- #
+# 答案来源标记
+# ---------------------------------------------------------------------- #
+# 用户必须能区分「答案来自我上传的文档」还是「模型的通用知识」，
+# 否则会误把模型的自由发挥当成内部资料，也会误以为"文档里没有"。
+# 来源被显式建模，并同时用于两处：
+#   · 后端：在答案正文前加免责说明（即使前端不渲染标记，也不会误导用户）
+#   · SSE：随 trace 事件下发，供前端渲染来源徽标
+ANSWER_FROM_KB = "knowledge_base"        # 检索命中，答案基于知识库文档
+ANSWER_FROM_TOOLS = "tools"              # 基于工具查询到的实时数据
+ANSWER_NOT_RETRIEVED = "not_retrieved"   # 检索了但未命中，退化为通用知识
+ANSWER_NO_RETRIEVAL = "no_retrieval"     # 该问题本就不需要检索（闲聊/写代码等）
+ANSWER_REFUSED = "refused"               # 审查未通过，诚实拒答
+
+# 需要明确提示「未基于知识库」的来源
+UNGROUNDED_SOURCES = {ANSWER_NOT_RETRIEVED, ANSWER_REFUSED}
+
+SOURCE_LABELS = {
+    ANSWER_FROM_KB: "基于知识库",
+    ANSWER_FROM_TOOLS: "基于实时查询",
+    ANSWER_NOT_RETRIEVED: "未检索到 · 通用知识",
+    ANSWER_NO_RETRIEVAL: "通用对话",
+    ANSWER_REFUSED: "无法回答",
+}
+
+# 未命中知识库时的正文提示：必须让用户一眼看出这不是文档内容
+NOT_RETRIEVED_NOTICE = (
+    "> ⚠️ **本次回答未基于你的知识库**：检索未命中相关片段。\n"
+    "> 以下内容来自模型的通用知识，可能不适用于你的项目，请自行核实。\n\n"
+)
+
 INTENT_TO_WORKER = {"rag": "rag_worker", "tool": "tool_worker", "direct": "direct_llm"}
 WORKER_LABELS = {
     "rag_worker": "RAG Worker",
@@ -120,6 +151,7 @@ class RAGState(TypedDict, total=False):
     response_text: str         # finalize 定稿的最终答案
     verdict_passed: bool       # 审查结论：是否通过
     verdict_reason: str        # 审查结论：原因
+    answer_source: str         # 答案来源（见上方 ANSWER_* 常量），用于提示用户
 
 
 class SupervisorAgent:
@@ -254,6 +286,26 @@ class SupervisorAgent:
         )
         trace.append(f"RAG Worker 向量召回 {len(docs)} 个候选片段")
 
+        # 相关性过滤：向量检索**一定会返回 top-k**，即使全部毫不相关。
+        # 不过滤就会出现「知识库里没有这个内容，却声称基于知识库回答」，
+        # 把无关片段当证据注入 prompt。低于阈值的候选直接丢弃。
+        #
+        # 阈值取自 RAM 检索的向量相似度（而非重排分数）——原因见 config.py 中
+        # RETRIEVE_MIN_SCORE 的说明：英文 Cross-Encoder 对中文无区分度。
+        min_score = getattr(settings, "RETRIEVE_MIN_SCORE", 0.0) or 0.0
+        if docs and min_score > 0:
+            kept = [
+                d for d in docs
+                if isinstance(d.metadata.get("vector_score"), float)
+                and d.metadata["vector_score"] >= min_score
+            ]
+            if len(kept) != len(docs):
+                trace.append(
+                    f"RAG Worker 相关性过滤：保留 {len(kept)}/{len(docs)} 个片段"
+                    f"（相似度阈值 {min_score}）"
+                )
+            docs = kept
+
         if docs:
             reranked: List[Document] = await asyncio.to_thread(
                 self.reranker.rerank, message, docs, 5
@@ -263,14 +315,22 @@ class SupervisorAgent:
                 score_text = f"，最高分 {top_score:.4f}" if isinstance(top_score, float) else ""
                 trace.append(f"RAG Worker Cross-Encoder 重排后保留 {len(reranked)} 个片段{score_text}")
             evidence = self._build_context(reranked)
+            # 只有真正拿到证据才算「基于知识库」
+            source = ANSWER_FROM_KB if evidence else ANSWER_NOT_RETRIEVED
         else:
-            trace.append("RAG Worker 未召回相关文档（交由审查判定是否可答）")
+            trace.append("RAG Worker 未召回相关文档，将退化为通用知识作答")
             evidence = ""
+            source = ANSWER_NOT_RETRIEVED
 
         draft = await self._generate_draft(
             message, state.get("history", ""), evidence, state.get("revision_feedback", "")
         )
-        return {"draft": draft, "evidence": evidence, "agent_trace": trace}
+        return {
+            "draft": draft,
+            "evidence": evidence,
+            "agent_trace": trace,
+            "answer_source": source,
+        }
 
     async def _tool_worker(self, state: RAGState) -> Dict[str, Any]:
         """
@@ -287,7 +347,10 @@ class SupervisorAgent:
         if not settings.DEEPSEEK_API_KEY:
             trace.append("Tool Worker 未配置 API Key，降级为直答")
             draft = await self._generate_draft(message, state.get("history", ""), "", "")
-            return {"draft": draft, "evidence": "", "agent_trace": trace, "tool_calls": []}
+            return {
+                "draft": draft, "evidence": "", "agent_trace": trace,
+                "tool_calls": [], "answer_source": ANSWER_NO_RETRIEVAL,
+            }
 
         system = SYSTEM_PROMPT
         feedback = state.get("revision_feedback", "")
@@ -331,11 +394,14 @@ class SupervisorAgent:
         ))
         draft = await self._generate_draft_from_messages(messages)
 
+        # 有工具结果才算「基于实时查询」，否则只是通用回答
+        source = ANSWER_FROM_TOOLS if evidence_parts else ANSWER_NO_RETRIEVAL
         return {
             "draft": draft,
             "evidence": "\n\n".join(evidence_parts),
             "agent_trace": trace,
             "tool_calls": tool_calls_log,
+            "answer_source": source,
         }
 
     async def _direct_llm(self, state: RAGState) -> Dict[str, Any]:
@@ -343,7 +409,13 @@ class SupervisorAgent:
             state.get("messages", ""), state.get("history", ""), "",
             state.get("revision_feedback", ""),
         )
-        return {"draft": draft, "evidence": "", "agent_trace": ["Direct LLM 通用对话模式"]}
+        # 该分支本就不检索知识库，如实标记为通用对话
+        return {
+            "draft": draft,
+            "evidence": "",
+            "agent_trace": ["Direct LLM 通用对话模式"],
+            "answer_source": ANSWER_NO_RETRIEVAL,
+        }
 
     # ------------------------------------------------------------------ #
     # 节点：verifier —— 独立审查 Agent
@@ -401,9 +473,18 @@ class SupervisorAgent:
     # 节点：finalize —— 只有通过审查的内容才会下发
     # ------------------------------------------------------------------ #
     async def _finalize_node(self, state: RAGState) -> Dict[str, Any]:
+        source = state.get("answer_source", ANSWER_NO_RETRIEVAL)
+
         if state.get("verdict_passed", True):
             text = state.get("draft", "")
             trace = ["Finalize 已通过审查，输出定稿"]
+
+            # 检索未命中时，必须在正文里明确告知用户「这不是知识库内容」。
+            # 仅靠前端徽标不够——复制粘贴或截屏分享时徽标会丢失，
+            # 而用户可能正是拿这段文字去做判断。
+            if source in UNGROUNDED_SOURCES and source == ANSWER_NOT_RETRIEVED:
+                text = NOT_RETRIEVED_NOTICE + text
+                trace.append("Finalize 标注：未基于知识库（检索未命中）")
         else:
             # 连续多轮无法给出有依据的答案：诚实拒答，而不是把编造内容推给用户
             verdict = Verdict(
@@ -411,9 +492,11 @@ class SupervisorAgent:
                 reason=state.get("verdict_reason", "") or "现有资料不足以支撑一个可靠的回答。",
             )
             text = VerifierAgent.build_refusal(verdict)
+            source = ANSWER_REFUSED
             trace = [f"Finalize 经 {MAX_REVISIONS} 轮审查仍未通过，转为诚实拒答"]
+            trace.append("Finalize 标注：无法回答（审查未通过）")
 
-        return {"agent_trace": trace, "response_text": text}
+        return {"agent_trace": trace, "response_text": text, "answer_source": source}
 
     # ------------------------------------------------------------------ #
     # 草稿生成
@@ -501,6 +584,7 @@ class SupervisorAgent:
                 "review_history": [],
                 "agent_trace": [],
                 "tool_calls": [],
+                "answer_source": ANSWER_NO_RETRIEVAL,
             })
         finally:
             clear_tool_context()
@@ -517,16 +601,23 @@ class SupervisorAgent:
         流式接口：依次下发 trace / token / done 事件。
 
         事件类型：
-          {"type": "trace", "content": [...], "tool_calls": [...]}  执行轨迹与审查结论
-          {"type": "token", "content": "增量文本"}                   增量输出
-          {"type": "done"}                                          结束标记
+          {"type": "trace", "content": [...], "tool_calls": [...],
+           "answer_source": "...", "source_label": "..."}   执行轨迹、审查结论与答案来源
+          {"type": "token", "content": "增量文本"}            增量输出
+          {"type": "done"}                                    结束标记
+
+        `answer_source` 用于让前端明确展示「本回答是否基于知识库」，
+        取值见 ANSWER_* 常量；`source_label` 是可直接显示的中文标签。
         """
         try:
             state = await self._run_graph(message, user_id, history_records, db=db)
+            source = state.get("answer_source", ANSWER_NO_RETRIEVAL)
             yield {
                 "type": "trace",
                 "content": list(state.get("agent_trace") or []),
                 "tool_calls": state.get("tool_calls") or [],
+                "answer_source": source,
+                "source_label": SOURCE_LABELS.get(source, ""),
             }
 
             text = state.get("response_text") or ""

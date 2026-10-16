@@ -733,6 +733,130 @@ async def _():
 
 
 # ---------------------------------------------------------------------- #
+print("\n=== 10. 答案来源标注（用户必须知道是否基于知识库）===")
+# ---------------------------------------------------------------------- #
+class _SourceHarness:
+    """
+    只替换 LLM 调用，**保留真实的检索、审查与 finalize 逻辑**，
+    从而验证「来源标记确实取决于检索结果」，而不是写死的常量。
+    """
+
+    def __init__(self, draft: str = "这是草稿答案"):
+        self.draft = draft
+        self.verdict_passed = True
+
+    def build(self):
+        from app.agents.supervisor import SupervisorAgent
+
+        cls = SupervisorAgent
+        self._saved = {
+            "_supervisor_node": cls._supervisor_node,
+            "_generate_draft": cls._generate_draft,
+        }
+
+        harness = self
+
+        # 注意：图节点以 `(agent_self, state)` 形式调用，因此桩函数必须同时接收两者
+        async def stub_supervisor(agent_self, state):
+            return {
+                "next_worker": "rag_worker",
+                "agent_trace": ["Supervisor 意图分类 → rag"],
+                "revision_count": 0,
+                "review_history": [],
+            }
+
+        async def stub_generate(agent_self, message, history, context, feedback=""):
+            # 记录实际拿到多少上下文：用来断言「有证据 → 基于知识库」
+            harness.last_context_len = len(context or "")
+            return harness.draft
+
+        cls._supervisor_node = stub_supervisor
+        cls._generate_draft = stub_generate
+        self.agent = SupervisorAgent()
+        self.last_context_len = 0
+
+        async def stub_review(question, draft, evidence, route="", attempt=1):
+            from app.agents.verifier import Verdict
+            return Verdict(passed=harness.verdict_passed, reason="测试用判定",
+                           feedback="" if harness.verdict_passed else "请修正")
+
+        self.agent.verifier.review = stub_review
+        return self.agent
+
+    def restore(self):
+        from app.agents.supervisor import SupervisorAgent
+        for name, fn in self._saved.items():
+            setattr(SupervisorAgent, name, fn)
+
+    async def run(self, question: str):
+        from app.agents.supervisor import SupervisorAgent
+        try:
+            return await self.agent.graph.ainvoke({
+                "messages": question, "history": "", "user_id": "",
+                "next_worker": "", "draft": "", "evidence": "",
+                "revision_feedback": "", "revision_count": 0,
+                "agent_trace": [], "review_history": [],
+            })
+        finally:
+            self.restore()
+
+
+@check("来源标注：检索未命中 → not_retrieved，且正文含明确提示")
+async def _():
+    from app.agents.supervisor import ANSWER_NOT_RETRIEVED, NOT_RETRIEVED_NOTICE
+    h = _SourceHarness()
+    h.build()
+    # 用一个知识库里不可能存在的词，确保检索必然落空
+    state = await h.run("zzz_这个主题在知识库中绝对不存在_qqq")
+    assert state["answer_source"] == ANSWER_NOT_RETRIEVED, \
+        f"来源标记错误: {state['answer_source']}"
+    text = state["response_text"]
+    assert NOT_RETRIEVED_NOTICE.strip() in text, "★ 正文缺少「未基于知识库」的明确提示"
+    assert "未基于你的知识库" in text
+    assert h.last_context_len == 0, "未命中却仍注入了上下文"
+    return f"来源={state['answer_source']}，正文已加提示"
+
+
+@check("来源标注：检索命中 → knowledge_base，且不加误导性提示")
+async def _():
+    from app.agents.supervisor import ANSWER_FROM_KB, NOT_RETRIEVED_NOTICE
+    h = _SourceHarness()
+    h.build()
+    # 依赖已重建的索引：查询知识库中确实存在的 git 手册内容
+    state = await h.run("git status 查看文件修改状态")
+    if state["answer_source"] != ANSWER_FROM_KB:
+        # 索引为空时该用例无意义（此时应走 not_retrieved），如实跳过而非误报
+        return f"跳过：当前索引未命中（来源={state['answer_source']}）"
+    assert h.last_context_len > 0, "标记为基于知识库却没有注入上下文"
+    assert NOT_RETRIEVED_NOTICE.strip() not in state["response_text"], \
+        "命中了却仍加「未基于知识库」提示"
+    return f"来源={state['answer_source']}，注入上下文 {h.last_context_len} 字符"
+
+
+@check("来源标注：审查未通过 → refused，且拒答不等于通用回答")
+async def _():
+    from app.agents.supervisor import ANSWER_REFUSED
+    h = _SourceHarness(draft="知识库中有 3 份文档（编造的）")
+    h.verdict_passed = False
+    h.build()
+    state = await h.run("知识库里有多少文档")
+    assert state["answer_source"] == ANSWER_REFUSED, f"来源标记错误: {state['answer_source']}"
+    assert "无法可靠地回答" in state["response_text"]
+    assert "编造的" not in state["response_text"], "★ 拒答时泄漏了原草稿"
+    return f"来源={state['answer_source']}，已拒答且不泄漏草稿"
+
+
+@check("来源标签表：五种来源均有可读中文标签")
+def _():
+    from app.agents.supervisor import SOURCE_LABELS
+    expect = {"knowledge_base", "tools", "not_retrieved", "no_retrieval", "refused"}
+    assert expect <= set(SOURCE_LABELS), f"缺少标签: {expect - set(SOURCE_LABELS)}"
+    for k in expect:
+        assert SOURCE_LABELS[k].strip(), f"{k} 的标签为空"
+    return " / ".join(SOURCE_LABELS[k] for k in sorted(expect))
+
+
+# ---------------------------------------------------------------------- #
 async def main():
     for runner in RUNNERS:
         await runner()

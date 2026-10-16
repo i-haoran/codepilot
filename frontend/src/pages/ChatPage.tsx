@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { chatStreamApi, conversationApi, ConversationItem } from '../services/api'
+import { chatStreamApi, conversationApi, ConversationItem, AnswerSource } from '../services/api'
 import ChatMessage from '../components/ChatMessage'
 import ChatInput from '../components/ChatInput'
 import './ChatPage.css'
@@ -16,6 +16,9 @@ interface Message {
   timestamp: Date
   agentTrace?: string[]
   toolCalls?: ToolCallItem[]
+  /** 答案来源，用于在气泡上标注「是否基于知识库」 */
+  answerSource?: AnswerSource
+  sourceLabel?: string
 }
 
 function ChatPage() {
@@ -108,6 +111,8 @@ function ChatPage() {
     let convId = currentConvId
     let agentTrace: string[] = []
     let toolCalls: ToolCallItem[] = []
+    let answerSource: AnswerSource | undefined
+    let sourceLabel: string | undefined
 
     try {
       let assistantContent = ''
@@ -127,6 +132,8 @@ function ChatPage() {
         } else if (chunk.type === 'trace') {
           agentTrace = chunk.data
           toolCalls = chunk.toolCalls
+          answerSource = chunk.answerSource
+          sourceLabel = chunk.sourceLabel
         } else if (chunk.type === 'error') {
           setMessages(prev => [...prev, {
             id: Date.now().toString(),
@@ -146,6 +153,8 @@ function ChatPage() {
               timestamp: new Date(),
               agentTrace: agentTrace.length > 0 ? agentTrace : undefined,
               toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+              answerSource,
+              sourceLabel,
             }])
           } else {
             setMessages(prev => {
@@ -157,6 +166,8 @@ function ChatPage() {
                     content: assistantContent,
                     agentTrace: agentTrace.length > 0 ? agentTrace : updated[i].agentTrace,
                     toolCalls: toolCalls.length > 0 ? toolCalls : updated[i].toolCalls,
+                    answerSource: answerSource ?? updated[i].answerSource,
+                    sourceLabel: sourceLabel ?? updated[i].sourceLabel,
                   }
                   break
                 }

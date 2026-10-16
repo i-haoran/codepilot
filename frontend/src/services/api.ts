@@ -103,10 +103,24 @@ export interface ToolCallItem {
   arguments: string
 }
 
+/** 答案来源：用于告知用户「本回答是否基于知识库」 */
+export type AnswerSource =
+  | 'knowledge_base'   // 检索命中，基于知识库文档
+  | 'tools'            // 基于工具查询到的实时数据
+  | 'not_retrieved'    // 检索了但未命中，退化为通用知识
+  | 'no_retrieval'     // 该问题本就不需要检索
+  | 'refused'          // 审查未通过，无法回答
+
 export type ChatStreamEvent =
   | { type: 'content'; data: string }
   | { type: 'conv_id'; data: string }
-  | { type: 'trace'; data: string[]; toolCalls: ToolCallItem[] }
+  | {
+      type: 'trace'
+      data: string[]
+      toolCalls: ToolCallItem[]
+      answerSource: AnswerSource
+      sourceLabel: string
+    }
   | { type: 'error'; data: string }
 
 export const chatStreamApi = {
@@ -162,6 +176,8 @@ export const chatStreamApi = {
               type: 'trace',
               data: Array.isArray(parsed.content) ? parsed.content : [String(parsed.content)],
               toolCalls: parsed.tool_calls ?? [],
+              answerSource: (parsed.answer_source ?? 'no_retrieval') as AnswerSource,
+              sourceLabel: parsed.source_label ?? '',
             }
           } else if (parsed.type === 'error') {
             yield { type: 'error', data: parsed.content }

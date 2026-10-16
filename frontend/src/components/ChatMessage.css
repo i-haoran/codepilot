@@ -71,6 +71,53 @@
   color: #9ca3af;
 }
 
+/* ---------- 答案来源徽标 ---------- */
+/* 让用户始终能区分「答案来自我的文档」还是「模型的通用知识」 */
+.source-badge {
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 2px 8px;
+  border-radius: 10px;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+/* 基于知识库：绿色，正面信号 */
+.source-badge.src-kb {
+  background: #ecfdf5;
+  color: #047857;
+  border-color: #a7f3d0;
+}
+
+/* 基于实时查询：蓝色 */
+.source-badge.src-tool {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border-color: #bfdbfe;
+}
+
+/* 未检索到 → 通用知识：橙色加粗边框，必须醒目 */
+.source-badge.src-warn {
+  background: #fff7ed;
+  color: #b45309;
+  border-color: #fdba74;
+  font-weight: 600;
+}
+
+/* 通用对话：灰色，中性 */
+.source-badge.src-general {
+  background: #f3f4f6;
+  color: #6b7280;
+  border-color: #e5e7eb;
+}
+
+/* 无法回答：红色 */
+.source-badge.src-refused {
+  background: #fef2f2;
+  color: #b91c1c;
+  border-color: #fecaca;
+}
+
 .message-body {
   background: #f9fafb;
   padding: 14px 18px;
