@@ -622,6 +622,102 @@ def _():
 
 
 # ---------------------------------------------------------------------- #
+print("\n=== 9. 协作回路端到端行为（注入式，确定性）===")
+# ---------------------------------------------------------------------- #
+def _harness_module():
+    """加载共享测试装置（位于 backend/tests，需把该目录加入路径）。"""
+    tests_dir = os.path.join(_PROJECT_DIR, "backend", "tests")
+    if tests_dir not in sys.path:
+        sys.path.insert(0, tests_dir)
+    import loop_harness  # noqa: PLC0415
+    return loop_harness
+
+
+@check("回路：首轮通过时不触发多余重做")
+async def _():
+    lh = _harness_module()
+    h, state = await lh.run_scenario(pass_on_attempt=1)
+    assert state["verdict_passed"] is True
+    assert state["response_text"] == "草稿A"
+    assert len(h.review_calls) == 1, "首轮通过却审查多次"
+    assert len(h.worker_calls) == 1, "首轮通过却重新生成"
+    return "生成 1 次 / 审查 1 次"
+
+
+@check("回路：审查不通过真的回到 Worker（回路的边走通了）")
+async def _():
+    lh = _harness_module()
+    h, state = await lh.run_scenario(pass_on_attempt=2)
+    assert state["response_text"] == "草稿B", f"交付的是 {state['response_text']}"
+    assert len(h.worker_calls) == 2, f"Worker 只被调了 {len(h.worker_calls)} 次"
+    assert state["revision_count"] == 1
+    return "第 1 轮不通过 → 重新生成 → 第 2 轮通过"
+
+
+@check("回路：审查意见真的回传给了下一轮生成")
+async def _():
+    lh = _harness_module()
+    h, state = await lh.run_scenario(pass_on_attempt=3)
+    assert len(h.worker_calls) == 3, f"生成 {len(h.worker_calls)} 次 ≠ 3"
+    assert h.worker_calls[0] == "", "首轮不应带审查意见"
+    assert "第 1 次要求" in h.worker_calls[1], "第 2 轮未收到第 1 轮反馈"
+    assert "第 2 次要求" in h.worker_calls[2], "第 3 轮未收到第 2 轮反馈"
+    assert state["verdict_passed"] is True
+    return "反馈逐轮正确回传"
+
+
+@check("回路：轮次上限生效，不会无限循环")
+async def _():
+    from app.agents.supervisor import MAX_REVISIONS
+    lh = _harness_module()
+    h, state = await lh.run_scenario(pass_on_attempt=99)
+    assert len(h.review_calls) == MAX_REVISIONS, f"审查 {len(h.review_calls)} 次 ≠ 上限 {MAX_REVISIONS}"
+    assert len(h.worker_calls) == MAX_REVISIONS
+    assert state["verdict_passed"] is False
+    return f"恰好 {MAX_REVISIONS} 轮后停止"
+
+
+@check("★ 回路：达上限仍不通过 → 诚实拒答，原草稿绝不泄漏")
+async def _():
+    lh = _harness_module()
+    fabricated = "知识库中有 3 份文档（这是编造的）"
+    _, state = await lh.run_scenario(pass_on_attempt=99, drafts=[fabricated] * 5)
+    text = state["response_text"]
+    assert "无法可靠地回答" in text, "未输出拒答话术"
+    assert "3 份文档" not in text, "★ 编造内容被泄漏"
+    assert "编造的" not in text, "★ 原草稿出现在输出中"
+    assert "依据" in text, "未说明拒答原因"
+    return "已拦截编造内容并说明原因"
+
+
+@check("回路：agent_trace 按执行顺序累加（reducer 生效）")
+async def _():
+    lh = _harness_module()
+    _, state = await lh.run_scenario(pass_on_attempt=3)
+    trace = state["agent_trace"]
+    assert any("意图分类" in t for t in trace), "缺少分类轨迹"
+    n_verifier = sum(1 for t in trace if "Verifier 审查" in t)
+    assert n_verifier == 3, f"审查轨迹数={n_verifier}"
+    assert any("重新生成" in t for t in trace), "缺少重做轨迹"
+    assert any("Finalize" in t for t in trace), "缺少定稿轨迹"
+    assert len(trace) >= 7, f"轨迹疑似被覆盖（仅 {len(trace)} 行）"
+    return f"完整链路共 {len(trace)} 行轨迹"
+
+
+@check("回路：审查历史逐轮记录，且修订不重新分类")
+async def _():
+    lh = _harness_module()
+    h, state = await lh.run_scenario(pass_on_attempt=3)
+    history = state["review_history"]
+    assert len(history) == 3, f"审查记录 {len(history)} 条 ≠ 3"
+    assert "attempt=1 pass=False" in history[0]
+    assert "attempt=3 pass=True" in history[2]
+    assert h.supervisor_calls == 1, f"重做时重复分类了（{h.supervisor_calls} 次）"
+    assert state["next_worker"] == "direct_llm", "分支被改变"
+    return "3 条审查记录，分类仅 1 次"
+
+
+# ---------------------------------------------------------------------- #
 async def main():
     for runner in RUNNERS:
         await runner()

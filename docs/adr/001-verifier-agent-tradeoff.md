@@ -94,15 +94,39 @@ worker → verifier ─通过→ finalize → 交付
 
 该决策的可验证性已固化在测试中：
 
-- `verify_project.py`（38 项，不依赖 LLM）：
+- `verify_project.py`（**45 项**，不依赖 LLM）：
   - 断言图中存在 `worker → verifier → revise → worker` **回路**（结构证据）
+  - **第 9 节用注入式装置确定性地验证整条回路行为**：
+    首轮通过不重做 / 不通过确实回到 Worker / 审查意见逐轮回传 /
+    轮次上限恰好 3 轮后停止 / **达上限必拒答且原草稿绝不泄漏** /
+    轨迹按序累加 / 修订不重新分类
   - 断言**审查不通过时 `finalize` 输出的必须是拒答，且原草稿内容绝不能出现在输出里**
   - 断言审查结果解析容错（Markdown 包裹、前后夹带解释文字）与失败时的 fail-open 标记
-- `backend/tests/test_verifier.py`：上述逻辑的 pytest 版本
-- `verify_llm_flow.py`（11 项，需真实 API Key）：
+- `backend/tests/test_verifier.py` + `backend/tests/test_collaboration_loop.py`：上述逻辑的 pytest 版本
+- `verify_llm_flow.py`（**11 项**，需真实 API Key）：
   - 「无证据却给出具体数字」→ 判不通过
   - 「有证据且一致」→ 判通过
   - 「资料不足但诚实说明」→ 判通过
   - 完整图执行的轨迹包含分类、工具调用、审查结论
 
 延迟数据由 `measure_verifier_cost.py` 实测得出。
+
+## 附：测试实现中踩到的坑（值得记录）
+
+用注入式装置替换图节点行为时，踩了两次：
+
+1. **替换实例属性无效**。`_build_graph()` 在 `__init__` 中编译图时，
+   节点位置就**持有了方法对象的引用**；之后再给实例赋同名属性，
+   图仍会调用原来的方法（实例属性遮蔽对已持有的引用无效）。
+
+2. **即使改成类级替换，提前还原也会失效**。`_generate_draft` 是 Worker 在
+   **运行期**通过 `self.` 查找的，一旦在 `__init__` 之后立刻还原类属性，
+   Worker 就会调回真实 LLM。实测表现为「Worker 生成 0 次」且输出变成真实模型的回答。
+
+**正确做法**：**先替换类方法 → 再创建 agent（图用桩函数编译）→
+贯穿整次图执行期间保持替换 → 执行结束后统一还原**。
+实现见 `backend/tests/loop_harness.py` 的 `build_agent()` / `restore()`。
+
+这个约束对生产也有意义：**运行期替换图节点行为必须走工厂或改图本身**，
+不能靠给实例打补丁——这决定了「按租户/环境动态替换某个 Agent」这类需求该怎么实现。
+

@@ -306,8 +306,10 @@ CodePilot/
 │   ├── components/                  # ChatMessage / ChatInput / AgentTrace
 │   ├── pages/                       # Chat / KnowledgeBase / History / PersonalCenter / Login
 │   └── services/api.ts              # axios + SSE 流解析
-├── verify_project.py                # 结构与逻辑自检（38 项，不依赖 LLM）
-├── verify_llm_flow.py               # 真实 LLM 路径验证（分类/审查/协作回路）
+├── verify_project.py                # 结构与逻辑自检（45 项，不依赖 LLM）
+├── verify_llm_flow.py               # 真实 LLM 路径验证（11 项，需 API Key）
+├── measure_verifier_cost.py         # 审查环节延迟开销实测
+├── docs/adr/                        # 架构决策记录（含取舍与备选方案）
 ├── Dockerfile                       # 多阶段构建
 └── docker-compose.yml               # backend + postgres + redis (+ frontend)
 ```
@@ -352,7 +354,27 @@ python verify_llm_flow.py
 
 测试覆盖：鉴权保护、会话 CRUD、文档上传与向量写入、知识库统计、
 路径穿越防护、分块边界、缓存降级、工具 schema 与错误处理、JWT 篡改拒绝，
-以及**审查结果解析容错、协作回路图结构、审查不通过时不得交付原草稿**等关键断言。
+以及**审查结果解析容错、协作回路图结构、轮次上限、审查不通过时不得交付原草稿**等关键断言。
+
+### 协作回路的确定性验证
+
+`verify_project.py` 第 9 节用**注入式装置**（`backend/tests/loop_harness.py`）
+把 LLM 调用替换为可控桩函数，让「第几轮通过 / 一直不通过」成为可复现的输入，
+而真实的图结构、路由函数与 finalize 逻辑全部保留。因此以下行为**每次都能被验证**：
+
+| 场景 | 断言 |
+|---|---|
+| 首轮通过 | 生成 1 次、审查 1 次，不触发多余重做 |
+| 第 2 轮通过 | Worker **确实被再次调用**（回路的边走通了） |
+| 每轮重做 | 携带上一轮的审查意见（反馈真的回传） |
+| 永不通过 | **恰好 3 轮后停止**，不会无限循环 |
+| 达上限 | 输出诚实拒答，且**原草稿内容绝不出现在输出里** |
+| 全流程 | `agent_trace` 按执行顺序累加（reducer 生效） |
+
+> ⚠️ 实现提示：替换图节点行为必须**先替换类方法、再创建 agent**，
+> 并在**整次图执行期间**保持替换。因为图在编译期持有节点方法的引用，
+> 而 `_generate_draft` 又是 Worker 运行期通过 `self.` 查找的——
+> 提前还原会让 Worker 调回真实 LLM。详见 `docs/adr/001-verifier-agent-tradeoff.md`。
 
 ---
 
