@@ -856,6 +856,48 @@ def _():
     return " / ".join(SOURCE_LABELS[k] for k in sorted(expect))
 
 
+@check("★ SSE 帧必须携带来源字段（路由层曾静默丢弃）")
+def _():
+    from app.agents.supervisor import ANSWER_FROM_KB, ANSWER_NOT_RETRIEVED, SOURCE_LABELS
+    from app.api.routes import _build_sse_frame
+
+    # 回归用例：agent 产出的 answer_source / source_label 必须被转发到 SSE 帧。
+    # 此处曾因「白名单式构帧」只硬编码了 type/content/tool_calls，
+    # 导致来源被丢弃，前端只能回落默认值，所有回答显示同一个标签。
+    for source in (ANSWER_NOT_RETRIEVED, ANSWER_FROM_KB):
+        event = {
+            "type": "trace",
+            "content": ["Supervisor 意图分类 → rag"],
+            "tool_calls": [{"name": "x", "arguments": "{}"}],
+            "answer_source": source,
+            "source_label": SOURCE_LABELS[source],
+        }
+        frame = _build_sse_frame(event)
+        assert frame.get("answer_source") == source, \
+            f"SSE 帧丢失 answer_source（得到 {frame.get('answer_source')!r}）"
+        assert frame.get("source_label") == SOURCE_LABELS[source], "SSE 帧丢失 source_label"
+        assert frame.get("tool_calls"), "SSE 帧丢失 tool_calls"
+
+    # 空值不应写入帧，避免前端拿到空标签
+    empty = _build_sse_frame({"type": "trace", "content": [], "answer_source": "", "tool_calls": []})
+    assert "answer_source" not in empty and "tool_calls" not in empty, "空值被写进了帧"
+    return "来源字段可正常转发，空值不写入"
+
+
+@check("★ SSE 白名单与 agent 实际产出字段一致（防止再次漏转发）")
+def _():
+    import inspect
+
+    from app.agents.supervisor import SupervisorAgent
+    from app.api.routes import SSE_PASSTHROUGH_FIELDS
+
+    src = inspect.getsource(SupervisorAgent.stream_with_trace)
+    for field in ("answer_source", "source_label", "tool_calls"):
+        assert field in src, f"stream_with_trace 未产出 {field}"
+        assert field in SSE_PASSTHROUGH_FIELDS, f"{field} 不在 SSE 转发白名单中"
+    return f"白名单 = {list(SSE_PASSTHROUGH_FIELDS)}"
+
+
 # ---------------------------------------------------------------------- #
 async def main():
     for runner in RUNNERS:

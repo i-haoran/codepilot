@@ -162,6 +162,25 @@ async def _load_history(db: AsyncSession, conv_id: str, limit: int = 20):
     return list(reversed(result.scalars().all()))
 
 
+# 从 agent 事件转发到 SSE 帧的**可选字段白名单**。
+#
+# 这里曾经是硬编码的两个字段（tool_calls），结果 agent 新增的
+# answer_source / source_label 被静默丢弃——前端拿不到来源，
+# 只能回落到默认值，导致所有回答都显示同一个标签。
+# 改为集中维护的字段表，新增字段只需在此登记，避免再次漏转发。
+SSE_PASSTHROUGH_FIELDS = ("tool_calls", "answer_source", "source_label")
+
+
+def _build_sse_frame(event: dict) -> dict:
+    """把 agent 内部事件转成对外的 SSE 帧（保留白名单内的可选字段）。"""
+    frame = {"type": event.get("type"), "content": event.get("content")}
+    for field in SSE_PASSTHROUGH_FIELDS:
+        value = event.get(field)
+        if value not in (None, "", [], {}):
+            frame[field] = value
+    return frame
+
+
 # ---------------------------------------------------------------------- #
 # 聊天
 # ---------------------------------------------------------------------- #
@@ -242,9 +261,7 @@ async def chat_stream(
                 elif event_type == "done":
                     continue
 
-                frame = {"type": event_type, "content": event.get("content")}
-                if event.get("tool_calls"):
-                    frame["tool_calls"] = event["tool_calls"]
+                frame = _build_sse_frame(event)
                 yield f"data: {json.dumps(frame, ensure_ascii=False)}\n\n"
 
             complete_response = "".join(full_response)
