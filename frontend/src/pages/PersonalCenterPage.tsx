@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { profileApi, documentApi, conversationApi, ProfileData, DocumentItem, ConversationItem, HistoryItem } from '../services/api'
+import { setAvatar as publishAvatar } from '../services/avatarStore'
 import './PersonalCenterPage.css'
 
 function stripMarkdown(text: string): string {
@@ -40,6 +41,8 @@ function PersonalCenterPage() {
       const res = await profileApi.get()
       setProfile(res.data)
       setNewName(res.data.username)
+      // 同步给全局 store：对话页气泡与侧边栏会立即跟着更新
+      publishAvatar(res.data.avatar || '')
     } catch {}
   }
 
@@ -63,8 +66,14 @@ function PersonalCenterPage() {
     try {
       const res = await profileApi.uploadAvatar(file)
       setProfile(prev => ({ ...prev, avatar: res.data.avatar }))
+      // 关键：同时写入全局 store，否则只有本页知道换过头像，
+      // 对话页的气泡仍显示旧图标，且必须刷新页面才能同步
+      publishAvatar(res.data.avatar || '')
     } catch {
       alert('头像上传失败')
+    } finally {
+      // 允许连续选择同一个文件（否则 input 的 value 不变不会触发 change）
+      e.target.value = ''
     }
   }
 

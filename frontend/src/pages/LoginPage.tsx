@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import { useState } from 'react'
 import { authApi } from '../services/api'
 import './LoginPage.css'
 

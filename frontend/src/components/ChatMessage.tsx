@@ -1,7 +1,8 @@
-import React from 'react'
 import ReactMarkdown from 'react-markdown'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { tomorrow } from 'react-syntax-highlighter/dist/esm/styles/prism'
+import type { ReactNode } from 'react'
+import { useAvatar } from '../services/avatarStore'
 import './ChatMessage.css'
 
 interface ToolCallItem {
@@ -20,15 +21,28 @@ interface Message {
 
 interface ChatMessageProps {
   message: Message
+  /** 用户名，用于没有头像时显示首字母 */
+  username?: string
 }
 
-function ChatMessage({ message }: ChatMessageProps) {
+function ChatMessage({ message, username }: ChatMessageProps) {
   const isUser = message.role === 'user'
+  // 订阅头像：在个人中心更换后，对话页无需刷新即可同步
+  const avatar = useAvatar()
+
+  const renderAvatar = () => {
+    if (!isUser) return '🤖'
+    // 有上传头像就显示图片，否则回退到用户名首字母 / 默认图标
+    if (avatar) {
+      return <img className="message-avatar-img" src={avatar} alt="我" />
+    }
+    return username?.[0]?.toUpperCase() || '👤'
+  }
 
   return (
     <div className={`chat-message ${isUser ? 'user' : 'assistant'}`}>
       <div className="message-avatar">
-        {isUser ? '👤' : '🤖'}
+        {renderAvatar()}
       </div>
       <div className="message-content">
         <div className="message-header">
@@ -40,21 +54,23 @@ function ChatMessage({ message }: ChatMessageProps) {
         <div className="message-body">
           <ReactMarkdown
             components={{
-              code({ node, inline, className, children, ...props }) {
+              // react-markdown 9.x 不再向 components 传 `inline`，改用 className
+              // 里是否带 language-xxx 来区分「代码块」与「行内代码」
+              code({ className, children }: {
+                className?: string
+                children?: ReactNode
+              }) {
                 const match = /language-(\w+)/.exec(className || '')
-                return !inline && match ? (
+                return match ? (
                   <SyntaxHighlighter
                     style={tomorrow}
                     language={match[1]}
                     PreTag="div"
-                    {...props}
                   >
                     {String(children).replace(/\n$/, '')}
                   </SyntaxHighlighter>
                 ) : (
-                  <code className={className} {...props}>
-                    {children}
-                  </code>
+                  <code className={className}>{children}</code>
                 )
               },
               p({ children }) {

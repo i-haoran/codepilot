@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { chatStreamApi, conversationApi, ConversationItem } from '../services/api'
 import ChatMessage from '../components/ChatMessage'
 import ChatInput from '../components/ChatInput'
@@ -26,6 +26,15 @@ function ChatPage() {
   const [convSidebarOpen, setConvSidebarOpen] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const streamIdRef = useRef(0)
+
+  // 无上传头像时用于显示用户名首字母
+  const username = (() => {
+    try {
+      return JSON.parse(localStorage.getItem('user') || '{}').username || ''
+    } catch {
+      return ''
+    }
+  })()
 
   useEffect(() => {
     loadConversations()
@@ -221,7 +230,7 @@ function ChatPage() {
           )}
 
           {messages.map(msg => (
-            <ChatMessage key={msg.id} message={msg} />
+            <ChatMessage key={msg.id} message={msg} username={username} />
           ))}
 
           {isLoading && messages[messages.length - 1]?.role !== 'assistant' && (

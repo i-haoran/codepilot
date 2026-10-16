@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { BrowserRouter as Router, Routes, Route, Link, useLocation, Navigate } from 'react-router-dom'
 import ChatPage from './pages/ChatPage'
 import PersonalCenterPage from './pages/PersonalCenterPage'
 import KnowledgeBasePage from './pages/KnowledgeBasePage'
 import HistoryPage from './pages/HistoryPage'
 import LoginPage from './pages/LoginPage'
+import { ensureAvatarLoaded, resetAvatar, useAvatar } from './services/avatarStore'
 import './App.css'
 
 interface User {
@@ -14,6 +15,7 @@ interface User {
 
 function SidebarContent({ user, onLogout, onNavClick }: { user: User; onLogout: () => void; onNavClick?: () => void }) {
   const location = useLocation()
+  const avatar = useAvatar()
 
   const handleNavClick = () => {
     onNavClick?.()
@@ -48,7 +50,10 @@ function SidebarContent({ user, onLogout, onNavClick }: { user: User; onLogout: 
       </nav>
       <div className="sidebar-footer">
         <div className="user-info">
-          <span className="user-avatar">👤</span>
+          {/* 侧边栏头像同样跟随个人中心的上传结果 */}
+          <span className="user-avatar">
+            {avatar ? <img className="user-avatar-img" src={avatar} alt="我" /> : '👤'}
+          </span>
           <span className="user-name">{user.username}</span>
           <button className="btn-logout" onClick={onLogout}>退出</button>
         </div>
@@ -65,16 +70,21 @@ function App() {
     const saved = localStorage.getItem('user')
     if (saved) {
       setUser(JSON.parse(saved))
+      // 登录态恢复后拉一次头像，供侧边栏与对话气泡共用
+      void ensureAvatarLoaded()
     }
   }, [])
 
   const handleLogin = (u: User, _token: string) => {
     setUser(u)
+    void ensureAvatarLoaded(true)
   }
 
   const handleLogout = () => {
     localStorage.removeItem('token')
     localStorage.removeItem('user')
+    // 清空头像缓存，避免下一个账号看到上一个账号的头像
+    resetAvatar()
     setUser(null)
   }
 

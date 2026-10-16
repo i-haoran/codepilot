@@ -434,7 +434,22 @@ async def _e2e_api():
             r = await ac.post("/api/v1/conversations")
             assert r.status_code == 200
             conv_id = r.json()["id"]
+            assert r.json()["title"] == "新会话", "新建会话应为占位标题"
             steps.append("建会话OK")
+
+            # ★ 会话命名回归测试
+            # 前端「新建会话」的流程是「先建会话、再发消息」，此时 conv_id 已存在。
+            # 原实现 _resolve_conversation 在该分支直接 return，
+            # 导致标题永远停留在占位符（用户实际反馈的 bug）。
+            # 这里显式复现该流程并断言标题被首条消息命名。
+            first_msg = "请介绍一下 CodePilot 的检索流程"
+            r = await ac.post("/api/v1/chat", json={"message": first_msg, "conversation_id": conv_id})
+            assert r.status_code == 200, f"聊天失败 {r.status_code}: {r.text[:200]}"
+            r = await ac.get("/api/v1/conversations")
+            titled = next(c for c in r.json() if c["id"] == conv_id)
+            assert titled["title"] != "新会话", "★ 复用已有会话时标题未被首条消息命名"
+            assert titled["title"] == first_msg[:50], f"标题不符: {titled['title']!r}"
+            steps.append(f"会话命名OK({titled['title'][:12]}…)")
 
             r = await ac.get("/api/v1/conversations")
             assert any(c["id"] == conv_id for c in r.json())

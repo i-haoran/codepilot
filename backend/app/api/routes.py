@@ -101,13 +101,51 @@ class UpdateProfileRequest(BaseModel):
 # ---------------------------------------------------------------------- #
 # 辅助
 # ---------------------------------------------------------------------- #
+DEFAULT_CONV_TITLE = "新会话"
+TITLE_MAX_LEN = 50
+
+
+def _derive_title(message: str) -> str:
+    """由首条消息推导会话标题。"""
+    title = " ".join((message or "").split()).strip()
+    return title[:TITLE_MAX_LEN] or DEFAULT_CONV_TITLE
+
+
 async def _resolve_conversation(
     db: AsyncSession, user: User, conv_id: Optional[str], first_message: str
 ) -> str:
-    """没有会话则新建；新建时用首条消息作为标题。"""
+    """
+    解析本次问答所属会话，并保证「未命名的会话」被首条消息命名。
+
+    原实现写成：
+        if conv_id:
+            return conv_id          # ← 早退，标题永远不更新
+    而前端「新建会话」的流程是**先建会话、再发消息**，因此 conv_id 总是已存在，
+    导致新建的会话标题永远停留在占位符，用户看到的就是「新会话」。
+    正确做法是：无论会话是新建还是复用，只要它还是占位标题就补上命名。
+    """
     if conv_id:
-        return conv_id
-    conv = Conversation(user_id=user.id, title=first_message[:50] or "新会话")
+        result = await db.execute(
+            select(Conversation).where(
+                Conversation.id == conv_id, Conversation.user_id == user.id
+            )
+        )
+        conv = result.scalar_one_or_none()
+        if conv is None:
+            # 会话不存在或不属于该用户：新建一个，避免把消息写进别人的会话
+            conv = Conversation(user_id=user.id, title=_derive_title(first_message))
+            db.add(conv)
+            await db.commit()
+            await db.refresh(conv)
+            return conv.id
+
+        # 复用已有会话：仍是占位标题则用首条消息命名
+        if conv.title in (None, "", DEFAULT_CONV_TITLE):
+            conv.title = _derive_title(first_message)
+            await db.commit()
+        return conv.id
+
+    conv = Conversation(user_id=user.id, title=_derive_title(first_message))
     db.add(conv)
     await db.commit()
     await db.refresh(conv)

@@ -1,4 +1,3 @@
-import React from 'react'
 import './AgentTrace.css'
 
 interface AgentTraceProps {

@@ -98,7 +98,8 @@ if HAVE_SLOWAPI:
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:5173", "http://127.0.0.1:5173",   # Vite 开发服务器
+        "http://localhost:5173", "http://127.0.0.1:5173",   # Vite 默认端口
+        "http://localhost:3000", "http://127.0.0.1:3000",   # 本项目 vite.config.ts 指定的端口
         "http://localhost:8080", "http://127.0.0.1:8080",   # 后端自身托管前端时
     ],
     allow_credentials=True,
