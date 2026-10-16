@@ -32,6 +32,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Dict, Optional
 
@@ -54,11 +55,19 @@ async def reconcile_knowledge_base(
     :param force: 为 True 时无条件重建所有文档的索引；否则只在检出不一致时重建
     :return: 统计信息；无需修复时返回 None
 
+    ⚠️ 该协程必须在**创建 engine 的同一个事件循环**中运行。
+    asyncpg 的连接绑定在创建它的事件循环上，若放到其它线程用 `asyncio.run()`
+    执行，会抛 `got Future attached to a different loop`。
+    因此这里所有**阻塞操作**（模型加载、向量写入）都用 `asyncio.to_thread` 下放，
+    数据库会话仍留在原循环里使用。
+
     一致性判定不做逐文档比对（那需要为每份文档各查一次向量库），
     而是先比较总量：`documents.chunk_count` 之和 vs 向量库实际总数。
     总量一致就认为无需修复，避免每次启动都做昂贵的全量检查。
     """
-    retriever = RAGRetriever()
+    # 构造 RAGRetriever 会同步加载 embedding 模型（约数十秒），必须下放到线程，
+    # 否则会阻塞事件循环，表现为服务"启动了但不响应"。
+    retriever = await asyncio.to_thread(RAGRetriever)
     if retriever.collection is None:
         logger.warning("向量库不可用，跳过知识库一致性校验")
         return None
@@ -68,7 +77,7 @@ async def reconcile_knowledge_base(
         return None
 
     expected = sum(int(d.chunk_count or 0) for d in docs)
-    actual = retriever.count()
+    actual = await asyncio.to_thread(retriever.count)
 
     if not force and expected == actual:
         return None
@@ -92,9 +101,12 @@ async def reconcile_knowledge_base(
         if not chunks:
             continue
 
-        # 幂等：先清掉该文档可能残留的分块，再重新写入
-        retriever.delete_by_doc_id(doc.id, chunk_count=doc.chunk_count)
-        written = retriever.add_chunks(chunks, doc_id=doc.id, user_id=doc.user_id)
+        # 幂等：先清掉该文档可能残留的分块，再重新写入。
+        # 向量化（最耗时的一步）在线程池中完成，不阻塞事件循环。
+        await asyncio.to_thread(retriever.delete_by_doc_id, doc.id, doc.chunk_count)
+        written = await asyncio.to_thread(
+            retriever.add_chunks, chunks, doc.id, doc.user_id
+        )
 
         if written != (doc.chunk_count or 0):
             doc.chunk_count = written
@@ -104,14 +116,15 @@ async def reconcile_knowledge_base(
         logger.info("已重建索引：%s → %s 块", doc.filename, written)
 
     await db.commit()
+    total_after = await asyncio.to_thread(retriever.count)
     logger.info(
         "知识库索引重建完成：修复 %s 份文档，共 %s 块（重建后总量 %s）",
-        repaired_docs, repaired_chunks, retriever.count(),
+        repaired_docs, repaired_chunks, total_after,
     )
     return {
         "documents": repaired_docs,
         "chunks": repaired_chunks,
         "expected_before": expected,
         "actual_before": actual,
-        "total_after": retriever.count(),
+        "total_after": total_after,
     }

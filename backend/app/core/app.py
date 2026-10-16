@@ -7,6 +7,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 
+import asyncio
 import logging
 import time
 
@@ -68,15 +69,26 @@ def _read_frontend_html() -> str:
     )
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    await init_db()
+async def _reconcile_in_background() -> None:
+    """
+    后台校验并修复知识库索引一致性。
 
-    # 启动时校验知识库索引一致性：
-    # 向量库可能因 embedding 模型变更、chroma_data 被删除、写入中断等原因被清空，
-    # 而数据库仍保有两个记录与原文。此时检索会全部落空，用户表现为
-    # 「知识库里有文档却问什么都答不出来」；引入审查 Agent 后更会以
-    # "诚实拒答"的形式出现，看起来像功能行为而非故障，因此必须自动修复。
+    关键约束：**必须在创建 engine 的同一个事件循环里运行**。
+    asyncpg 的连接绑定在创建它的事件循环上；若另起线程用 asyncio.run() 执行，
+    会抛 `got Future attached to a different loop`（本项目实测踩到）。
+    因此这里用 `asyncio.create_task` 留在原循环，
+    而把其中**阻塞的部分**（embedding 模型加载、向量写入）在 reindex 内部
+    用 `asyncio.to_thread` 下放，做到既不阻塞事件循环、又不跨循环使用连接。
+
+    为什么必须放到后台：该校验会加载 embedding 模型并可能重建整库索引，
+    实测约 28 秒。若在 lifespan 里同步执行，服务会一直卡在
+    `Waiting for application startup.`，日志上看像是进程挂了。
+
+    向量库可能因 embedding 模型变更、chroma_data 被删除、写入中断等原因被清空，
+    而数据库仍保有文档记录与原文。此时检索会全部落空，用户表现为
+    「知识库里有文档却问什么都答不出来」；引入审查 Agent 后更会以
+    "诚实拒答"的形式出现，看起来像功能行为而非故障，因此必须自动修复。
+    """
     try:
         from app.core.database import async_session
         from app.services.reindex import reconcile_knowledge_base
@@ -85,16 +97,36 @@ async def lifespan(app: FastAPI):
             report = await reconcile_knowledge_base(session)
         if report:
             logger.warning(
-                "启动时重建了知识库索引：修复 %s 份文档 / %s 个分块"
+                "后台重建知识库索引完成：修复 %s 份文档 / %s 个分块"
                 "（修复前 数据库=%s 向量库=%s，修复后=%s）",
                 report["documents"], report["chunks"],
                 report["expected_before"], report["actual_before"], report["total_after"],
             )
-    except Exception as exc:  # noqa: BLE001 - 校验失败不应阻断启动
-        logger.error("知识库索引一致性校验失败（不影响服务启动）: %s", exc, exc_info=True)
+        else:
+            logger.info("知识库索引一致性校验通过，无需重建")
+    except Exception as exc:  # noqa: BLE001 - 校验失败不影响服务
+        logger.error("知识库索引一致性校验失败（不影响服务运行）: %s", exc, exc_info=True)
 
-    logger.info("%s v%s 启动完成", settings.APP_NAME, settings.APP_VERSION)
-    yield
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_db()
+
+    # 以后台任务方式启动校验：不阻塞事件循环，启动日志与端口立即可用。
+    reconcile_task = asyncio.create_task(_reconcile_in_background())
+    logger.info("%s v%s 启动完成（索引校验在后台进行）", settings.APP_NAME, settings.APP_VERSION)
+    try:
+        yield
+    finally:
+        # 关闭时若后台任务仍在跑，等待其结束，避免索引写一半被中断
+        if not reconcile_task.done():
+            logger.info("等待后台索引校验完成……")
+            try:
+                await asyncio.wait_for(reconcile_task, timeout=60)
+            except asyncio.TimeoutError:
+                logger.warning("后台索引校验超时，已放弃等待")
+            except Exception:  # noqa: BLE001
+                pass
 
 
 limiter = None
@@ -155,14 +187,28 @@ async def serve_frontend():
 
 @app.get("/health")
 async def health_check():
-    """健康检查：额外暴露向量库与缓存依赖状态，便于部署排查。"""
+    """
+    健康检查：暴露向量库 / embedding / LLM 配置状态，便于部署排查。
+
+    注意这里**刻意不去实例化 RAGRetriever**：它的构造函数会加载 embedding 模型
+    （首次约 28 秒），若在此触发，健康检查会长时间无响应，
+    部署平台的 readiness/liveness 探针会误判服务不可用并反复重启容器。
+    因此只在「检索器已就绪」时报告其状态，未就绪则如实标记为 warming_up。
+    """
+    from app.rag.embeddings import embedding_service
     from app.rag.retriever import RAGRetriever
 
-    retriever = RAGRetriever()
+    existing = RAGRetriever._instance  # 单例；为 None 表示尚未初始化
+    if existing is None:
+        vector_store, embedding = "warming_up", embedding_service.dimension_hint()
+    else:
+        vector_store = "ok" if existing.collection is not None else "unavailable"
+        embedding = existing.embedding_source
+
     return {
         "status": "healthy",
         "version": settings.APP_VERSION,
-        "vector_store": "ok" if retriever.collection is not None else "unavailable",
-        "embedding": retriever.embedding_source,
+        "vector_store": vector_store,
+        "embedding": embedding,
         "llm_configured": bool(settings.DEEPSEEK_API_KEY),
     }

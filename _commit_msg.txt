@@ -1,0 +1,38 @@
+fix: 修复意图分类误判、审查过度拒答与启动阻塞三个缺陷
+
+用户实测反馈：来源徽标全是灰色通用对话、知识库未命中时仍不回复、
+后端卡在 Waiting for application startup。逐一排查结果：
+
+1) 来源徽标全灰 —— 根因是意图分类器误判，不是徽标问题
+   - git status 查看文件修改状态、Git 远程仓库怎么用 被判为 direct，
+     压根没走检索，来源自然是 no_retrieval；而 怎么合并分支 却判成 rag，
+     同类问题分类结果不一致
+   - 修复：重写分类 prompt，明确「涉及具体技术主题/工具用法的问题优先 rag」
+     （git/redis/docker 等通用工具的用法往往就写在内部速查手册里），
+     并给出三类的正反例。实测三条 git 问题均正确路由到 rag 并命中知识库
+
+2) 知识库未命中时不回复 —— 审查 Agent 判定过严
+   - 原判定原则要求所有具体事实都有出处，导致通用知识问题（如
+     用 Python 写个快速排序）在资料为空时被判 fail，反复重试后走拒答
+   - 修复：verifier 新增第 0 条原则——先判断问题是否需要内部资料；
+     通用知识问题不因资料为空而拒绝，只要未编造项目专属事实即 pass。
+     同时 system prompt 区分「通用技术知识→正常作答」与
+     「本项目专属信息→如实说明没有」。实测 什么是redis 现在给出完整
+     通用知识回答并带明确提示，而不再只回一句资料中没有
+
+3) 启动阻塞 —— 我上一轮加的启动索引校验引入
+   - 该校验加载 embedding 模型并可能重建整库，实测 22~28 秒；
+     放在 lifespan 里同步执行会让服务长期卡在 Waiting for application startup
+   - 尝试一（asyncio.create_task）失败：协程内同步加载模型仍占满事件循环，
+     startup 日志依旧要等模型加载完
+   - 尝试二（独立线程 + asyncio.run）失败：asyncpg 连接绑定创建它的循环，
+     跨线程使用抛 got Future attached to a different loop
+   - 最终方案：留在原事件循环用 create_task，把阻塞部分
+     （RAGRetriever 构造、向量写入）在 reindex 内部用 asyncio.to_thread 下放
+   - 另外 /health 原先会实例化 RAGRetriever 从而触发 20+ 秒模型加载，
+     会让部署探针误判不健康；改为只在检索器已就绪时报告其状态，
+     未就绪时如实标记 warming_up
+
+验证：verify_project.py 49 项全绿；verify_llm_flow.py 11 项全绿；
+启动日志立即出现 Application startup complete，/health 启动后 0.12s 返回；
+约 40 秒后后台校验完成，/health 显示 vector_store=ok 且 embedding 为中文模型
