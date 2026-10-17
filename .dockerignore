@@ -1,0 +1,70 @@
+# Docker 构建上下文排除清单
+#
+# 为什么必须有这个文件：`docker build` 会把整个上下文目录打包发给 Docker 引擎。
+# 本项目实测上下文里有这些「不该进镜像」的内容：
+#   · backend/.hf_cache      179 MB  —— 本机模型缓存，Dockerfile 已单独预下载模型
+#   · frontend/node_modules   90 MB  —— Windows 平台的依赖，进容器会破坏 Linux 构建
+#   · .git / chroma_data / dist      —— 与运行无关或会在镜像内重新生成
+# 不加这个文件，构建会慢到无法接受，且可能因平台不匹配而失败。
+
+# ---------- 版本控制 ----------
+.git
+.gitignore
+
+# ---------- 依赖目录（容器内会重新安装） ----------
+**/node_modules
+.venv
+**/.venv
+**/.venv-linux
+**/.venv-*
+venv
+**/venv
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/*.egg-info
+
+# ---------- 本机模型缓存（Dockerfile 内已预下载） ----------
+**/.hf_cache
+**/.cache
+
+# ---------- 运行时产物（容器内重新生成，或用数据卷挂载） ----------
+backend/chroma_data
+backend/uploads
+backend/*.log
+*.log
+frontend/dist
+
+# ---------- 环境变量与密钥（绝不进镜像） ----------
+.env
+.env.*
+!.env.example
+
+# ---------- 本地开发辅助（不入镜像） ----------
+.devshims
+.testdeps
+verify_project.py
+verify_llm_flow.py
+eval_retrieval.py
+measure_verifier_cost.py
+reindex_documents.py
+setup_git.py
+gen_project_doc.py
+gen_resume_docx.py
+doc_content.py
+doc_content_part2.py
+
+# ---------- 个人文档 ----------
+*.docx
+*.pdf
+简历*.md
+面试逐条拆解.md
+实习求职策略.md
+投递前必做清单.md
+docs/
+
+# ---------- 编辑器 / 系统 ----------
+.idea
+.vscode
+.DS_Store
+Thumbs.db
