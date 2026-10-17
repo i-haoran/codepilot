@@ -899,6 +899,74 @@ def _():
 
 
 # ---------------------------------------------------------------------- #
+print("\n=== 11. 后端托管前端（白屏问题回归）===")
+# ---------------------------------------------------------------------- #
+async def _frontend_serving_checks():
+    """
+    验证后端能否完整托管前端。
+
+    背景：构建产物 dist/index.html 引用 /assets/index-xxx.js 这类绝对路径，
+    而原先后端只注册了 `/` 一个路由、没有任何静态资源挂载，
+    于是 HTML 能返回但 JS/CSS 全部 404，React 从不挂载 → 页面一片空白。
+    这类白屏极易被误判为后端或数据库故障。
+    """
+    import re
+
+    from httpx import ASGITransport, AsyncClient
+    from app.core.app import app
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.get("/")
+        assert r.status_code == 200 and '<div id="root">' in r.text, f"首页异常 HTTP {r.status_code}"
+
+        refs = re.findall(r'(?:src|href)="(/assets/[^"]+)"', r.text)
+        assert refs, "首页未引用任何 /assets/* 资源，无法验证静态托管"
+
+        for ref in refs:
+            rr = await ac.get(ref)
+            assert rr.status_code == 200, f"静态资源 404: {ref}（这正是白屏根因）"
+            assert len(rr.content) > 1000, f"静态资源内容过小: {ref}"
+
+        # SPA 回退：前端路由直接访问/刷新不应 404
+        for path in ("/history", "/profile", "/knowledge"):
+            rr = await ac.get(path)
+            assert rr.status_code == 200 and '<div id="root">' in rr.text, f"SPA 回退失效: {path}"
+
+        # 通配回退绝不能吞掉接口：未匹配的 /api 必须保持 404
+        rr = await ac.get("/api/v1/definitely-not-exist")
+        assert rr.status_code == 404, f"未匹配的 /api 被回退吞掉（HTTP {rr.status_code}）"
+
+        # 通配路由若注册在其它路由之前，会把 /health 变成 HTML——必须守住
+        rr = await ac.get("/health")
+        assert rr.status_code == 200 and rr.headers.get("content-type", "").startswith("application/json"), \
+            f"/health 被通配路由劫持（content-type={rr.headers.get('content-type')}）"
+        assert rr.json().get("status") == "healthy"
+
+        rr = await ac.get("/docs")
+        assert rr.status_code == 200, "/docs 不可用"
+
+    return f"首页 + {len(refs)} 个静态资源 + 3 条 SPA 回退 + 接口未受影响"
+
+
+@check("★ 后端完整托管前端（静态资源 / SPA 回退 / 接口不受影响）")
+async def _():
+    return await _frontend_serving_checks()
+
+
+@check("★ SPA 通配路由必须注册在最后（否则劫持 /health）")
+def _():
+    from app.core.app import app
+
+    paths = [getattr(r, "path", "") for r in app.routes]
+    assert "/{full_path:path}" in paths, "未注册 SPA 回退路由"
+    idx = paths.index("/{full_path:path}")
+    after = [p for p in paths[idx + 1:] if p]
+    assert not after, f"通配路由之后仍有路由 {after}，它们会被吞掉"
+    return f"通配路由位于第 {idx} 位，之后无其它路由"
+
+
+# ---------------------------------------------------------------------- #
 async def main():
     for runner in RUNNERS:
         await runner()

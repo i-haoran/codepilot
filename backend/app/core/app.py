@@ -3,9 +3,10 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 import asyncio
 import logging
@@ -34,6 +35,12 @@ logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
 
+def _find_frontend_dist() -> Path | None:
+    """定位前端生产构建产物目录（含 index.html 与 assets/）。"""
+    dist = PROJECT_ROOT / "frontend" / "dist"
+    return dist if (dist / "index.html").exists() else None
+
+
 def _read_frontend_html() -> str:
     """
     读取前端入口 HTML。
@@ -44,7 +51,7 @@ def _read_frontend_html() -> str:
     """
     candidates = [
         PROJECT_ROOT / "frontend" / "dist" / "index.html",   # 生产构建产物
-        PROJECT_ROOT / "frontend" / "index.html",            # 开发入口
+        PROJECT_ROOT / "frontend" / "index.html",            # 开发入口（需 Vite 提供 /src/*）
     ]
     for path in candidates:
         try:
@@ -164,6 +171,27 @@ app.add_middleware(
 app.include_router(auth_router, prefix="/api/v1/auth", tags=["认证"])
 app.include_router(router, prefix="/api/v1")
 
+# ---------------------------------------------------------------------- #
+# 前端静态资源挂载
+# ---------------------------------------------------------------------- #
+# 关键修复：构建产物 dist/index.html 引用的是 /assets/index-xxx.js 这类绝对路径，
+# 但原先只注册了 `/` 一个路由，没有任何静态资源挂载——于是 HTML 能返回，
+# 浏览器请求 /assets/*.js 全部 404，React 从未挂载，页面一片空白。
+# 这类"白屏"极易被误判为后端或数据库故障，实际只是资源 404。
+#
+# 顺序要求：必须在 API 路由注册之后再挂载，避免 StaticFiles 抢占 /api 路径。
+FRONTEND_DIST = _find_frontend_dist()
+if FRONTEND_DIST is not None:
+    assets_dir = FRONTEND_DIST / "assets"
+    if assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+    logger.info("已挂载前端静态资源: %s", FRONTEND_DIST)
+else:
+    logger.warning(
+        "未找到前端构建产物（frontend/dist），后端将只提供接口与提示页；"
+        "请在 frontend 目录执行 npm run build，或使用 npm run dev 访问开发服务器。"
+    )
+
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
@@ -212,3 +240,23 @@ async def health_check():
         "embedding": embedding,
         "llm_configured": bool(settings.DEEPSEEK_API_KEY),
     }
+
+
+# ---------------------------------------------------------------------- #
+# SPA 回退路由（必须注册在**所有**路由之后）
+# ---------------------------------------------------------------------- #
+# FastAPI 按注册顺序匹配路由，通配路由 /{full_path:path} 会吞掉它之后注册的一切。
+# 本项目实测踩到：把回退路由放在 /health 之前，导致 GET /health 返回 HTML 而非 JSON，
+# 部署探针与前端健康检查全部失效。因此它必须位于文件最末尾。
+@app.get("/{full_path:path}", response_class=HTMLResponse)
+async def spa_fallback(full_path: str):
+    """
+    把非接口的未知路径交还给前端路由处理。
+
+    前端用 React Router 管理 /history、/profile 等路径，这些路径在后端并不存在。
+    若不做回退，用户刷新或直接访问子路径会得到 404 而不是页面。
+    """
+    # 兜底保护：绝不吞掉接口请求，未匹配到的 /api 应保持 404 语义
+    if full_path.startswith(("api/", "assets/", "docs", "openapi.json", "redoc")):
+        raise HTTPException(status_code=404, detail="Not Found")
+    return _read_frontend_html()
