@@ -1,0 +1,120 @@
+{
+  "documents": 9,
+  "total_bytes": 41715,
+  "total_nonempty_lines": 898,
+  "line_length": {
+    "p50": 29,
+    "p90": 56,
+    "p99": 78,
+    "max": 153,
+    "over_512": 0,
+    "over_200": 0
+  },
+  "markers": {
+    "chapter": 55,
+    "subsection": 74,
+    "rule": 22
+  },
+  "structured_documents": 7,
+  "per_file": [
+    {
+      "file": "alembic迁移使用指南.txt",
+      "bytes": 2650,
+      "lines": 107,
+      "nonempty": 74,
+      "chapters": 0,
+      "subsections": 7,
+      "rules": 1,
+      "max_line": 67,
+      "structured": true
+    },
+    {
+      "file": "Docker常用命令.txt",
+      "bytes": 7564,
+      "lines": 129,
+      "nonempty": 104,
+      "chapters": 0,
+      "subsections": 10,
+      "rules": 4,
+      "max_line": 91,
+      "structured": true
+    },
+    {
+      "file": "Git命令速查手册.txt",
+      "bytes": 7529,
+      "lines": 232,
+      "nonempty": 172,
+      "chapters": 10,
+      "subsections": 16,
+      "rules": 4,
+      "max_line": 78,
+      "structured": true
+    },
+    {
+      "file": "Linux常用命令.txt",
+      "bytes": 7225,
+      "lines": 223,
+      "nonempty": 187,
+      "chapters": 24,
+      "subsections": 0,
+      "rules": 6,
+      "max_line": 63,
+      "structured": true
+    },
+    {
+      "file": "ngrok命令.txt",
+      "bytes": 1051,
+      "lines": 34,
+      "nonempty": 27,
+      "chapters": 0,
+      "subsections": 0,
+      "rules": 1,
+      "max_line": 46,
+      "structured": false
+    },
+    {
+      "file": "redis常用命令.txt",
+      "bytes": 6144,
+      "lines": 143,
+      "nonempty": 128,
+      "chapters": 0,
+      "subsections": 15,
+      "rules": 1,
+      "max_line": 58,
+      "structured": true
+    },
+    {
+      "file": "虚拟环境与依赖管理.txt",
+      "bytes": 6784,
+      "lines": 233,
+      "nonempty": 154,
+      "chapters": 18,
+      "subsections": 18,
+      "rules": 3,
+      "max_line": 78,
+      "structured": true
+    },
+    {
+      "file": "开关命令.txt",
+      "bytes": 2300,
+      "lines": 52,
+      "nonempty": 40,
+      "chapters": 3,
+      "subsections": 8,
+      "rules": 2,
+      "max_line": 153,
+      "structured": true
+    },
+    {
+      "file": "jwt.txt",
+      "bytes": 468,
+      "lines": 18,
+      "nonempty": 12,
+      "chapters": 0,
+      "subsections": 0,
+      "rules": 0,
+      "max_line": 70,
+      "structured": false
+    }
+  ]
+}
