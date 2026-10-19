@@ -40,7 +40,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.document import Document
-from app.rag.processor import DocumentProcessor
+from app.rag.splitter_factory import get_processor
 from app.rag.retriever import RAGRetriever
 
 logger = logging.getLogger(__name__)
@@ -86,7 +86,7 @@ async def reconcile_knowledge_base(
         "检出知识库索引不一致（数据库记录 %s 块，向量库实际 %s 块），开始从原文重建……",
         expected, actual,
     )
-    processor = DocumentProcessor()
+    processor = get_processor()
     repaired_docs = 0
     repaired_chunks = 0
 

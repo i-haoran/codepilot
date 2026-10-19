@@ -1,4 +1,6 @@
 import asyncio
+import os
+import sys
 from logging.config import fileConfig
 
 from sqlalchemy import pool
@@ -6,6 +8,13 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
+
+# alembic 由 console script（/usr/local/bin/alembic）启动时，sys.path 里没有项目根目录，
+# 导致 `from app.core.config import ...` 报 ModuleNotFoundError。
+# 这里显式把 backend/（本文件的上上级）加进 sys.path，让容器内外都能导入 app 包。
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 from app.core.config import settings
 from app.core.database import Base

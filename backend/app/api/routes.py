@@ -12,7 +12,7 @@ from app.models.chat import ChatHistory
 from app.models.conversation import Conversation
 from app.models.document import Document
 from app.models.user import User
-from app.rag.processor import DocumentProcessor
+from app.rag.splitter_factory import get_processor
 from app.rag.retriever import RAGRetriever
 from app.services.cache import CacheService
 
@@ -396,7 +396,9 @@ async def upload_document(
     if not text.strip():
         raise HTTPException(status_code=400, detail="文件内容为空或不是 UTF-8 文本")
 
-    processor = DocumentProcessor()
+    # 按文档结构自适应选择分块策略：结构化速查文档走结构感知分块，
+    # 无结构文档回落递归字符切分。
+    processor = get_processor()
     chunks = processor.process(text, metadata={"filename": file.filename, "user_id": user.id})
     if not chunks:
         raise HTTPException(status_code=400, detail="文档分块后为空，请检查文件内容")
