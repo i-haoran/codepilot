@@ -30,6 +30,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend/requirements.txt ./
+# 先装 CPU 版 torch：requirements 中的 sentence-transformers 会默认拖入完整 CUDA 栈
+# （nvidia-cublas / cudnn / nccl 等数 GB 依赖）。本服务是 CPU 推理、compose 也未声明
+# GPU，拉 CUDA 版既让镜像暴涨数 GB，也曾在 8GB 的 Docker VM 上把构建直接搞崩。
+# 预先装好 CPU 版后，下一步 pip 会直接复用，不再解析 CUDA 依赖。
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 预下载中文向量模型与 Cross-Encoder，避免容器首次请求时才下载

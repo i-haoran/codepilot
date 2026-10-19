@@ -11,6 +11,10 @@ services:
       # 容器内通过服务名访问，覆盖 .env 里的 localhost
       DATABASE_URL: postgresql+asyncpg://codepilot:codepilot@postgres:5432/codepilot
       REDIS_URL: redis://redis:6379/0
+      # Celery 也必须改成服务名：.env 里是 localhost:6379 且带密码 3375，
+      # 容器内 localhost 指向容器自身，不覆盖就连不上。
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
       CHROMA_COLLECTION: codepilot_knowledge
     volumes:
       # 与 app/rag/retriever.py 中的路径保持一致：
@@ -46,8 +50,10 @@ services:
       POSTGRES_USER: codepilot
       POSTGRES_PASSWORD: codepilot
       POSTGRES_DB: codepilot
-    ports:
-      - "5432:5432"
+    # 刻意不发布到宿主：宿主 5432 被原生 PostgreSQL 18 服务占用（它还在服务
+    # gateway/harbordesk 等其他项目）。backend 走 compose 网络用服务名 postgres
+    # 访问，本就不需要宿主端口；强行发布只会静默失败。
+    # 若需要从宿主用 GUI 客户端连容器库，改成 "5433:5432"。
     volumes:
       - pg_data:/var/lib/postgresql/data
     healthcheck:
@@ -59,8 +65,8 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    # 同上：宿主 6379 被原生 Redis 占用，backend 用服务名访问即可。
+    # 需要宿主访问时可改为 "6380:6379"。
     volumes:
       - redis_data:/data
     healthcheck:
