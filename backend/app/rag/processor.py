@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Dict, List, Optional
 
 from langchain_core.documents import Document
@@ -24,6 +25,9 @@ logger = logging.getLogger(__name__)
 
 # 分隔符按"语义边界从强到弱"排列：段落 → 换行 → 中英文句末 → 逗号 → 空格
 DEFAULT_SEPARATORS = ["\n\n", "\n", "。", "！", "？", ".", "!", "?", "；", ";", "，", ",", " ", ""]
+
+# 连续 3 个以上换行 → 压成 2 个（保留段落边界）。一次替换，避免反复扫描。
+_RE_BLANK_LINES = re.compile(r"\n{3,}")
 
 
 class DocumentProcessor:
@@ -143,13 +147,17 @@ class DocumentProcessor:
         # 去掉行尾空白
         lines = [line.rstrip() for line in text.split("\n")]
         text = "\n".join(lines)
-        # 3 个以上连续换行压成 2 个（保留段落边界）
-        while "\n\n\n" in text:
-            text = text.replace("\n\n\n", "\n\n")
-        # 行内多空格压缩为单空格（不动换行）
-        normalized_lines = []
-        for line in text.split("\n"):
-            normalized_lines.append(" ".join(line.split(" ")) if "  " in line else line)
+        # 3 个以上连续换行压成 2 个（保留段落边界）。
+        # 用正则一次替换，避免原先 `while ... replace` 的 O(n²) 问题：
+        # 那个写法每次只把 3 个换行压成 2 个，遇到长串空行要反复扫描全文。
+        text = _RE_BLANK_LINES.sub("\n\n", text)
+        # 行内多空格压缩为单空格（不动换行）。
+        # 注意必须是 split() 不带参数——按任意空白拆分并丢弃空串，才真正压缩；
+        # 写成 split(" ") 与 " ".join 互为逆运算，等于什么都没做。
+        normalized_lines = [
+            " ".join(line.split()) if "  " in line else line
+            for line in text.split("\n")
+        ]
         return "\n".join(normalized_lines).strip()
 
     @property
