@@ -230,7 +230,7 @@ async def health_check():
     if existing is None:
         vector_store, embedding = "warming_up", embedding_service.dimension_hint()
     else:
-        vector_store = "ok" if existing.collection is not None else "unavailable"
+        vector_store = "ok" if existing.available else "unavailable"
         embedding = existing.embedding_source
 
     return {

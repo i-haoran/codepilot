@@ -28,7 +28,9 @@ langgraph>=0.2.0
 
 # ---------- RAG / Embedding ----------
 langchain-huggingface>=0.1.0     # HuggingFaceEmbeddings 的正式归属包
-chromadb>=0.5.0
+chromadb>=0.5.0                  # 旧实现保留（数据迁移用，迁移完成后可移除）
+pgvector>=0.2.5                  # pgvector 的 SQLAlchemy 类型（Vector）
+psycopg2-binary>=2.9.9           # 同步驱动：检索在线程池中以同步方式访问 PG
 sentence-transformers>=3.0.0     # CrossEncoder 重排 + 本地中文向量模型
 numpy>=1.26,<3
 

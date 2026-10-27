@@ -45,7 +45,9 @@ services:
     profiles: ["dev"]   # 仅在 docker compose --profile dev up 时启动
 
   postgres:
-    image: postgres:16-alpine
+    # pgvector 官方镜像：基于 PostgreSQL 16，自带 vector 扩展
+    # （原 postgres:16-alpine 需额外编译安装扩展，镜像不支持）
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: codepilot
       POSTGRES_PASSWORD: codepilot

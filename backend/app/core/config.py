@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     # 对中文文档检索效果很差。
     EMBEDDING_PROVIDER: str = "local"
     EMBEDDING_MODEL: str = "BAAI/bge-small-zh-v1.5"
+    # 向量维度，必须与 EMBEDDING_MODEL 一致（bge-small-zh-v1.5 = 512）。
+    # pgvector 建表时按此维度声明 vector(N)，换模型必须同步改这里并重建索引。
+    EMBEDDING_DIM: int = 512
 
     # ---------- RAG 分块与检索 ----------
     CHUNK_SIZE: int = 512

@@ -406,10 +406,10 @@ async def upload_document(
     # 先确认向量库可用：否则会出现「数据库有记录、向量库没有」的假成功，
     # 而用户看到的只是"上传成功"，之后无论怎么提问都检索不到内容。
     retriever = RAGRetriever()
-    if retriever.collection is None:
+    if not retriever.available:
         raise HTTPException(
             status_code=503,
-            detail="向量库当前不可用，文档未入库。请检查后端日志中的 Chroma / Embedding 错误。",
+            detail="向量库当前不可用，文档未入库。请检查后端日志中的 PostgreSQL / pgvector / Embedding 错误。",
         )
 
     doc = Document(

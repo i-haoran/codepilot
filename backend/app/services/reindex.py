@@ -68,7 +68,7 @@ async def reconcile_knowledge_base(
     # 构造 RAGRetriever 会同步加载 embedding 模型（约数十秒），必须下放到线程，
     # 否则会阻塞事件循环，表现为服务"启动了但不响应"。
     retriever = await asyncio.to_thread(RAGRetriever)
-    if retriever.collection is None:
+    if not retriever.available:
         logger.warning("向量库不可用，跳过知识库一致性校验")
         return None
 
