@@ -12,10 +12,13 @@ from app.models.chat import ChatHistory
 from app.models.conversation import Conversation
 from app.models.document import Document
 from app.models.user import User
+from app.rag.chunk_store import build_rows, delete_chunks, insert_chunks
+from app.rag.embeddings import embedding_service
 from app.rag.splitter_factory import get_processor
 from app.rag.retriever import RAGRetriever
 from app.services.cache import CacheService
 
+import asyncio
 import json
 import logging
 import uuid
@@ -412,33 +415,35 @@ async def upload_document(
             detail="向量库当前不可用，文档未入库。请检查后端日志中的 PostgreSQL / pgvector / Embedding 错误。",
         )
 
+    doc_id = str(uuid.uuid4())
+
+    # 向量化是阻塞的 CPU 计算，放线程池；失败直接抛错、不写库，
+    # 避免留下「有记录、没向量」的半成品。
+    texts = [chunk.page_content for chunk in chunks]
+    try:
+        vectors = await asyncio.to_thread(embedding_service.embed_documents, texts)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("向量化失败 doc_id=%s filename=%s: %s", doc_id, file.filename, exc)
+        raise HTTPException(
+            status_code=500,
+            detail="文档向量化失败，未入库。请查看后端日志中的 Embedding 错误。",
+        ) from exc
+
+    rows = build_rows(chunks, vectors, doc_id, user.id)
     doc = Document(
+        id=doc_id,
         user_id=user.id,
         filename=file.filename,
         content=text,
         chunk_count=len(chunks),
     )
+
+    # 关键：业务记录与向量在**同一个事务**里提交。
+    # 任何一步失败都会整体回滚，不会出现「库里有文档、向量却没写全」。
     db.add(doc)
+    await insert_chunks(db, rows)
     await db.commit()
     await db.refresh(doc)
-
-    written = retriever.add_chunks(chunks, doc_id=doc.id, user_id=user.id)
-
-    # 向量写入不完整时**不要静默成功**：纠正记录值并如实告知，
-    # 避免留下「chunk_count 说有 N 块、实际检索不到」的不一致状态。
-    if written != len(chunks):
-        logger.error(
-            "向量写入不完整: written=%s chunks=%s doc_id=%s filename=%s",
-            written, len(chunks), doc.id, doc.filename,
-        )
-        if doc.chunk_count != written:
-            doc.chunk_count = written
-            await db.commit()
-        if written == 0:
-            raise HTTPException(
-                status_code=500,
-                detail="文档已保存，但向量化失败，检索将无法命中。请查看后端日志。",
-            )
 
     return DocumentResponse(
         id=doc.id, filename=doc.filename,
@@ -478,9 +483,9 @@ async def delete_document(
     if not doc:
         raise HTTPException(status_code=404, detail="文档不存在")
 
-    # 先删向量再删元数据；向量删除失败不阻断（避免出现孤儿记录无法清理）
-    removed = RAGRetriever().delete_by_doc_id(doc_id, chunk_count=doc.chunk_count)
-
+    # 向量与元数据在同一事务内删除：要么都删掉，要么都保留，
+    # 不会出现「记录没了、向量还在」的孤儿数据。
+    removed = await delete_chunks(db, doc_id)
     await db.delete(doc)
     await db.commit()
     return {"detail": "已删除", "removed_vectors": removed}
